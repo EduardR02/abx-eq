@@ -1,6 +1,9 @@
 # abx-eq
 
-Blind preference testing for headphone EQ presets. Find your actual optimum, not your placebo.
+Your headphones could sound better. EQ fixes that — congrats, you're now smarter than most youtube "reviewers". The problem is picking the right preset when you have ten of them and no way to compare without bias creeping in.
+
+This is a blind A/B testing tool for EQ presets. Drop in your music, drop in your presets, and just pick whichever sounds better. You never see which is which. At the end you get a nice ranking. That's it.
+If you don't know where to start, you can use [PEQDB](https://peqdb.com) to get an initial target that's much better than Harman.
 
 ## What / Why
 
