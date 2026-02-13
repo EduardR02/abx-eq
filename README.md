@@ -60,47 +60,20 @@ Filter 3: ON PK Fc 2204 Hz Gain 1.73 dB Q 1.414
 
 ## Built with
 
-Coded in ~15 minutes using [opencode](https://github.com/nichochar/opencode) with Claude, GPT, and Gemini. The EQ presets and music are personal — the tool itself is general purpose.
+Coded in ~15 minutes using [opencode](https://github.com/anomalyco/opencode) with Claude, GPT, and Gemini. The EQ presets and music are personal — the tool itself is general purpose.
 
 ---
 
 <details>
-<summary><strong>AI context</strong> (for LLMs / agents reading this repo)</summary>
+<summary><strong>For AI agents</strong></summary>
 
-### Setup
+Key things you won't get from reading the code:
 
-- Runtime: [Bun](https://bun.sh) (no Node — uses Bun's native test runner and HTTP server)
-- No `npm install` needed — zero dependencies
-- Start: `bun run server.ts` → serves on `http://localhost:3000`
-- Tests: `bun test` (36 tests)
-
-### Structure
-
-```
-server.ts                  Bun HTTP server — serves static files + API
-public/
-  index.html               SPA shell
-  style.css                Dark theme styles
-  app.js                   Main application logic, UI flow, state management
-  audio-engine.js          Web Audio API: offline EQ rendering, LUFS measurement,
-                           loudness normalization, simultaneous playback, gain-node switching
-  eq-parser.js             EqualizerAPO format parser
-  bradley-terry.js         Bradley-Terry model (MLE ranking from pairwise preferences)
-  elo.js                   ELO rating (secondary ranking)
-  matchup-scheduler.js     Adaptive pair scheduling (round-robin + uncertainty sampling)
-  stats.js                 Binomial sign test, p-values, power calculations
-  round-plan.js            Matchup budget suggestions
-  abx-run.js               ABX trial state management
-tests/                     Bun test files (*.test.js / *.test.ts)
-music/                     User's .wav files (gitignored)
-presets_for_shootout/      User's EqualizerAPO .txt presets (gitignored)
-```
-
-### API
-
-- `GET /api/presets` — parsed preset list from `presets_for_shootout/`
-- `GET /api/tracks` — track filenames from `music/`
-- `GET /music/:filename` — serves WAV files (supports range requests)
+- **Runtime is Bun, not Node.** `bun run server.ts` to start, `bun test` to test. No install step — zero dependencies.
+- **User content goes in `music/` and `presets_for_shootout/`** (both gitignored). The app reads these directories on the fly via API.
+- **The core architectural invariant:** all EQ variants are pre-rendered into separate `AudioBuffer`s, loudness-normalized, then played simultaneously through per-variant `GainNode`s. Switching active preset = setting one gain to 1 and the rest to 0. This is what makes switching instant. Don't break this — if you make variants play sequentially or recreate sources on switch, you'll get gaps.
+- **EQ math uses manual RBJ biquad coefficients**, not Web Audio `BiquadFilterNode`, to avoid shelf filter Q-mapping ambiguity with EqualizerAPO. The implementation is in `audio-engine.js`.
+- **API routes:** `GET /api/presets` (parsed from `presets_for_shootout/`), `GET /api/tracks` (from `music/`), `GET /music/:filename` (WAV serving with range support).
 
 </details>
 
