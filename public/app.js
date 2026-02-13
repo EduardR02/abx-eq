@@ -1,0 +1,1532 @@
+import { AudioEngine } from "./audio-engine.js";
+import { buildHeadToHead, buildStandings } from "./elo.js";
+import { buildBradleyTerryStandings } from "./bradley-terry.js";
+import { MatchupScheduler } from "./matchup-scheduler.js";
+import {
+  accuracy,
+  binomialTailProbability,
+  formatPercent,
+  isSignificant,
+  pairPreferencePValue,
+} from "./stats.js";
+import { advanceAbxRunTrial } from "./abx-run.js";
+import {
+  ROUND_PLAN_TIERS,
+  buildRoundPlanSuggestions,
+  pairCountForPresetCount,
+} from "./round-plan.js";
+
+const STORAGE_KEY = "abxEqState.v1";
+const NO_EQ_ID = "__no_eq__";
+const TRANSITION_MS = 150;
+const ROUND_COMPLETE_MS = 2000;
+const TOAST_MS = 1500;
+const LOOP_DEFAULT_SECONDS = 10;
+const LOOP_MIN_SECONDS = 1;
+
+const state = {
+  presets: [],
+  tracks: [],
+  selectedPresetIds: [],
+  selectedTrack: "",
+  mode: null,
+  selectionKey: "",
+
+  selectedMatchups: 1,
+  selectedRoundPlan: "standard",
+  roundPlanSuggestions: {
+    quick: 1,
+    standard: 1,
+    rigorous: 1,
+  },
+
+  preferenceScheduler: null,
+  currentPreferencePair: null,
+  activePreferenceMatches: [],
+  isAdvancingPreference: false,
+  toastTimer: null,
+
+  abxPairs: [],
+  abxRun: null,
+  abxListeningTarget: "A",
+
+  store: {
+    preferenceMatches: [],
+    abxRuns: [],
+  },
+
+  isSeekDragging: false,
+  isLoopHandleDragging: false,
+  loopDragHandle: null,
+  loopDragPointerId: null,
+  prepareToken: 0,
+};
+
+const audio = new AudioEngine();
+
+const dom = {
+  backToSetup: document.getElementById("back-to-setup"),
+  setupScreen: document.getElementById("setup-screen"),
+  loadingScreen: document.getElementById("loading-screen"),
+  preferenceScreen: document.getElementById("preference-screen"),
+  roundCompleteScreen: document.getElementById("round-complete-screen"),
+  abxScreen: document.getElementById("abx-screen"),
+  resultsScreen: document.getElementById("results-screen"),
+  playbackControls: document.getElementById("playback-controls"),
+
+  setupError: document.getElementById("setup-error"),
+  presetList: document.getElementById("preset-list"),
+  setupTrackSelect: document.getElementById("track-select-setup"),
+  roundsQuickBtn: document.getElementById("rounds-quick"),
+  roundsStandardBtn: document.getElementById("rounds-standard"),
+  roundsRigorousBtn: document.getElementById("rounds-rigorous"),
+  roundsCustomInput: document.getElementById("rounds-custom"),
+  roundsSummary: document.getElementById("rounds-summary"),
+  startPreferenceBtn: document.getElementById("start-preference"),
+  startAbxBtn: document.getElementById("start-abx"),
+
+  loadingText: document.getElementById("loading-text"),
+  loadingBar: document.getElementById("loading-bar"),
+
+  prefTrackSelect: document.getElementById("track-select-preference"),
+  preferenceStage: document.getElementById("preference-stage"),
+  matchupText: document.getElementById("matchup-text"),
+  matchupMeta: document.getElementById("matchup-meta"),
+  buttonA: document.getElementById("switch-a"),
+  buttonB: document.getElementById("switch-b"),
+  preferA: document.getElementById("prefer-a"),
+  tie: document.getElementById("prefer-draw"),
+  preferB: document.getElementById("prefer-b"),
+  prefProgress: document.getElementById("preference-progress"),
+  preferenceToast: document.getElementById("preference-toast"),
+
+  roundCompleteTitle: document.getElementById("round-complete-title"),
+  roundCompleteText: document.getElementById("round-complete-text"),
+
+  abxTrackSelect: document.getElementById("track-select-abx"),
+  abxPairSelect: document.getElementById("abx-pair-select"),
+  abxTrialCount: document.getElementById("abx-trials"),
+  abxStartRun: document.getElementById("abx-start-run"),
+  abxNowText: document.getElementById("abx-now-text"),
+  abxSwitchA: document.getElementById("abx-switch-a"),
+  abxSwitchB: document.getElementById("abx-switch-b"),
+  abxSwitchX: document.getElementById("abx-switch-x"),
+  abxGuessA: document.getElementById("abx-guess-a"),
+  abxGuessB: document.getElementById("abx-guess-b"),
+  abxProgress: document.getElementById("abx-progress"),
+  abxStats: document.getElementById("abx-stats"),
+
+  restartBtn: document.getElementById("restart"),
+  rewindBtn: document.getElementById("rewind"),
+  playPauseBtn: document.getElementById("play-pause"),
+  forwardBtn: document.getElementById("forward"),
+  seekSlider: document.getElementById("seek"),
+  loopRegion: document.getElementById("loop-region"),
+  loopHandleStart: document.getElementById("loop-handle-start"),
+  loopHandleEnd: document.getElementById("loop-handle-end"),
+  timeLabel: document.getElementById("time-label"),
+  loopToggleBtn: document.getElementById("loop-toggle"),
+  loopTimes: document.getElementById("loop-times"),
+  volumeSlider: document.getElementById("volume"),
+
+  resultsTitle: document.getElementById("results-title"),
+  preferenceTableBody: document.getElementById("preference-table-body"),
+  schedulingSummary: document.getElementById("scheduling-summary"),
+  schedulingPairs: document.getElementById("scheduling-pairs"),
+  significanceSummary: document.getElementById("significance-summary"),
+  significanceRecommendation: document.getElementById("significance-recommendation"),
+  headToHeadWrap: document.getElementById("head-to-head-wrap"),
+  abxResultsSection: document.getElementById("abx-results-section"),
+  abxTableBody: document.getElementById("abx-table-body"),
+  anotherRoundBtn: document.getElementById("another-round"),
+  resultsSetupBtn: document.getElementById("results-to-setup"),
+};
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function recomputeRoundPlanSuggestions(presetCount) {
+  state.roundPlanSuggestions = buildRoundPlanSuggestions(presetCount);
+}
+
+function getRoundPlanMatchups(plan) {
+  const matchups = state.roundPlanSuggestions[plan];
+  if (!Number.isFinite(matchups) || matchups <= 0) {
+    return 1;
+  }
+  return Math.round(matchups);
+}
+
+function isPreferenceScreenActive() {
+  return state.mode === "preference" && !dom.preferenceScreen.classList.contains("hidden");
+}
+
+function saveStore() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.store));
+}
+
+function loadStore() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) {
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      state.store.preferenceMatches = Array.isArray(parsed.preferenceMatches) ? parsed.preferenceMatches : [];
+      state.store.abxRuns = Array.isArray(parsed.abxRuns) ? parsed.abxRuns : [];
+    }
+  } catch {
+    state.store.preferenceMatches = [];
+    state.store.abxRuns = [];
+  }
+}
+
+function getPresetById(id) {
+  return state.presets.find((preset) => preset.id === id) ?? null;
+}
+
+function getSelectionKey(ids) {
+  return [...ids].sort((a, b) => a.localeCompare(b)).join("|");
+}
+
+function listCurrentPresets() {
+  return state.selectedPresetIds
+    .map((id) => getPresetById(id))
+    .filter(Boolean);
+}
+
+function showScreen(name) {
+  const screens = {
+    setup: dom.setupScreen,
+    loading: dom.loadingScreen,
+    preference: dom.preferenceScreen,
+    roundComplete: dom.roundCompleteScreen,
+    abx: dom.abxScreen,
+    results: dom.resultsScreen,
+  };
+
+  for (const [key, element] of Object.entries(screens)) {
+    element.classList.toggle("hidden", key !== name);
+  }
+
+  const showPlayback = name === "preference" || name === "abx";
+  dom.playbackControls.classList.toggle("hidden", !showPlayback);
+  dom.backToSetup.classList.toggle("hidden", name === "setup");
+}
+
+function setSetupError(message) {
+  dom.setupError.textContent = message || "";
+  dom.setupError.classList.toggle("hidden", !message);
+}
+
+function buildAbxPairs(presetIds) {
+  const pairs = [];
+  for (let i = 0; i < presetIds.length; i += 1) {
+    for (let j = i + 1; j < presetIds.length; j += 1) {
+      const aId = presetIds[i];
+      const bId = presetIds[j];
+      const first = getPresetById(aId);
+      const second = getPresetById(bId);
+      pairs.push({
+        id: `${aId}|${bId}`,
+        aId,
+        bId,
+        label: `${first?.name ?? aId} vs ${second?.name ?? bId}`,
+      });
+    }
+  }
+  return pairs;
+}
+
+function formatTime(seconds) {
+  const safe = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
+  const mins = Math.floor(safe / 60);
+  const secs = Math.floor(safe % 60);
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
+
+function getLoopMinLength(duration) {
+  if (!(duration > 0)) {
+    return 0;
+  }
+  return Math.min(LOOP_MIN_SECONDS, duration);
+}
+
+function formatLoopTimes(startTime, endTime) {
+  return `Loop: ${formatTime(startTime)} - ${formatTime(endTime)}`;
+}
+
+function clampLoopRange(startTime, endTime, duration) {
+  if (!(duration > 0)) {
+    return { startTime: 0, endTime: 0 };
+  }
+
+  let safeStart = Number.isFinite(startTime) ? startTime : 0;
+  let safeEnd = Number.isFinite(endTime) ? endTime : duration;
+  if (safeStart > safeEnd) {
+    [safeStart, safeEnd] = [safeEnd, safeStart];
+  }
+
+  safeStart = Math.min(duration, Math.max(0, safeStart));
+  safeEnd = Math.min(duration, Math.max(0, safeEnd));
+
+  const minimumLength = getLoopMinLength(duration);
+  if (minimumLength > 0 && (safeEnd - safeStart) < minimumLength) {
+    if (safeStart + minimumLength <= duration) {
+      safeEnd = safeStart + minimumLength;
+    } else {
+      safeEnd = duration;
+      safeStart = Math.max(0, duration - minimumLength);
+    }
+  }
+
+  return {
+    startTime: safeStart,
+    endTime: safeEnd,
+  };
+}
+
+function updateLoopUi() {
+  const playback = audio.getState();
+  const duration = playback.duration || 0;
+  const loop = audio.getLoopState();
+  const loopActive = loop.enabled && duration > 0;
+
+  dom.loopToggleBtn.classList.toggle("active", loopActive);
+  dom.loopRegion.classList.toggle("hidden", !loopActive);
+  dom.loopHandleStart.classList.toggle("hidden", !loopActive);
+  dom.loopHandleEnd.classList.toggle("hidden", !loopActive);
+  dom.loopTimes.classList.toggle("hidden", !loopActive);
+
+  if (!loopActive) {
+    dom.loopTimes.textContent = formatLoopTimes(0, 0);
+    return;
+  }
+
+  const range = clampLoopRange(loop.startTime, loop.endTime, duration);
+  const startPercent = (range.startTime / duration) * 100;
+  const endPercent = (range.endTime / duration) * 100;
+
+  dom.loopRegion.style.left = `${startPercent}%`;
+  dom.loopRegion.style.width = `${Math.max(0, endPercent - startPercent)}%`;
+  dom.loopHandleStart.style.left = `${startPercent}%`;
+  dom.loopHandleEnd.style.left = `${endPercent}%`;
+  dom.loopTimes.textContent = formatLoopTimes(range.startTime, range.endTime);
+}
+
+function updatePlaybackUi() {
+  const playback = audio.getState();
+  const duration = playback.duration || 0;
+  const currentTime = playback.currentTime || 0;
+
+  dom.seekSlider.max = String(duration);
+  if (!state.isSeekDragging) {
+    dom.seekSlider.value = String(currentTime);
+  }
+
+  dom.playPauseBtn.textContent = playback.isPlaying ? "⏸" : "▶";
+  dom.timeLabel.textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
+  updateLoopUi();
+}
+
+function setActiveButton(button, active) {
+  button.classList.toggle("active", active);
+}
+
+function clearPreferenceActiveButtons() {
+  setActiveButton(dom.buttonA, false);
+  setActiveButton(dom.buttonB, false);
+}
+
+function setPreferenceButtonsEnabled(enabled) {
+  dom.buttonA.disabled = !enabled;
+  dom.buttonB.disabled = !enabled;
+  dom.preferA.disabled = !enabled;
+  dom.tie.disabled = !enabled;
+  dom.preferB.disabled = !enabled;
+}
+
+function showPreferenceToast(message) {
+  if (!message) {
+    return;
+  }
+
+  if (state.toastTimer) {
+    clearTimeout(state.toastTimer);
+  }
+
+  dom.preferenceToast.textContent = message;
+  dom.preferenceToast.classList.remove("hidden");
+  dom.preferenceToast.classList.add("show");
+
+  state.toastTimer = setTimeout(() => {
+    dom.preferenceToast.classList.remove("show");
+    dom.preferenceToast.classList.add("hidden");
+    state.toastTimer = null;
+  }, TOAST_MS);
+}
+
+function formatPhaseLabel(phase) {
+  if (phase === "refinement") {
+    return "Refinement phase";
+  }
+  return "Discovery phase";
+}
+
+function updatePreferenceUi() {
+  const pair = state.currentPreferencePair;
+  const progress = state.preferenceScheduler?.progress ?? {
+    done: state.activePreferenceMatches.length,
+    total: state.selectedMatchups,
+    phase: "discovery",
+  };
+
+  if (!pair) {
+    dom.matchupText.textContent = "Preference test complete";
+    dom.matchupMeta.textContent = "";
+    dom.prefProgress.textContent = progress.total > 0
+      ? `Completed ${progress.total} of ${progress.total} matchups.`
+      : "";
+    setPreferenceButtonsEnabled(false);
+    return;
+  }
+
+  const matchupNumber = progress.done + 1;
+
+  dom.matchupText.textContent = "A vs B";
+  dom.matchupMeta.textContent = state.selectedTrack ? `Track: ${state.selectedTrack}` : "";
+  dom.prefProgress.textContent = `Matchup ${matchupNumber} of ${progress.total} (${formatPhaseLabel(progress.phase)})`;
+
+  setPreferenceButtonsEnabled(!state.isAdvancingPreference);
+
+  const playback = audio.getState();
+  setActiveButton(dom.buttonA, playback.activeVariantId === pair.presetA);
+  setActiveButton(dom.buttonB, playback.activeVariantId === pair.presetB);
+}
+
+function updateAbxUi() {
+  const run = state.abxRun;
+  if (!run) {
+    dom.abxNowText.textContent = "Choose a pair and start a run.";
+    dom.abxProgress.textContent = "";
+    dom.abxStats.textContent = "";
+    dom.abxGuessA.disabled = true;
+    dom.abxGuessB.disabled = true;
+    return;
+  }
+
+  dom.abxNowText.textContent = "Testing pair: A vs B";
+
+  const completed = run.trialIndex;
+  const progressLine = completed >= run.totalTrials
+    ? `Completed ${run.totalTrials} of ${run.totalTrials} trials.`
+    : `Trial ${completed + 1} of ${run.totalTrials}`;
+
+  const currentAccuracy = accuracy(run.correct, Math.max(completed, 1));
+  const pValue = completed > 0 ? binomialTailProbability(run.correct, completed, 0.5) : 1;
+  const significance = isSignificant(pValue) ? " (significant)" : "";
+
+  dom.abxProgress.textContent = progressLine;
+  dom.abxStats.textContent = `Correct: ${run.correct}/${completed} - Accuracy ${formatPercent(currentAccuracy)} - p=${pValue.toFixed(4)}${significance}`;
+
+  const runDone = completed >= run.totalTrials;
+  dom.abxGuessA.disabled = runDone;
+  dom.abxGuessB.disabled = runDone;
+
+  setActiveButton(dom.abxSwitchA, state.abxListeningTarget === "A");
+  setActiveButton(dom.abxSwitchB, state.abxListeningTarget === "B");
+  setActiveButton(dom.abxSwitchX, state.abxListeningTarget === "X");
+}
+
+function renderResults() {
+  const currentPresets = listCurrentPresets();
+  const ids = new Set(currentPresets.map((preset) => preset.id));
+  const nameById = new Map(currentPresets.map((preset) => [preset.id, preset.name]));
+
+  const relevantPreference = state.store.preferenceMatches.filter((match) => (
+    match.selectionKey === state.selectionKey
+    && ids.has(match.presetA)
+    && ids.has(match.presetB)
+  ));
+
+  let discoveryCount = 0;
+  let refinementCount = 0;
+  let legacyCount = 0;
+
+  const pairCounts = new Map();
+  for (const match of relevantPreference) {
+    if (match.phase === "discovery") {
+      discoveryCount += 1;
+    } else if (match.phase === "refinement") {
+      refinementCount += 1;
+    } else {
+      legacyCount += 1;
+    }
+
+    const key = match.presetA < match.presetB
+      ? `${match.presetA}|${match.presetB}`
+      : `${match.presetB}|${match.presetA}`;
+    pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1);
+  }
+
+  if (relevantPreference.length === 0) {
+    dom.schedulingSummary.textContent = "No matchups recorded for this preset set yet.";
+    dom.schedulingPairs.textContent = "";
+  } else {
+    const label = legacyCount > 0
+      ? `Scheduling: ${discoveryCount} discovery + ${refinementCount} refinement (${legacyCount} legacy round-based).`
+      : `Scheduling: ${discoveryCount} discovery + ${refinementCount} refinement.`;
+    dom.schedulingSummary.textContent = label;
+
+    const mostCompared = [...pairCounts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 3)
+      .map(([key, count]) => {
+        const [firstId, secondId] = key.split("|");
+        const firstName = nameById.get(firstId) ?? firstId;
+        const secondName = nameById.get(secondId) ?? secondId;
+        return `${firstName} vs ${secondName} (${count})`;
+      });
+
+    dom.schedulingPairs.textContent = mostCompared.length > 0
+      ? `Most compared pairs: ${mostCompared.join(", ")}`
+      : "";
+  }
+
+  const eloStandings = buildStandings(currentPresets, relevantPreference, 32);
+  const eloById = new Map(eloStandings.map((row) => [row.id, row.rating]));
+  const btStandings = buildBradleyTerryStandings(currentPresets, relevantPreference, {
+    confidenceSamples: 60,
+    fitOptions: { maxIterations: 70 },
+  });
+
+  dom.preferenceTableBody.innerHTML = "";
+  for (let i = 0; i < btStandings.length; i += 1) {
+    const row = btStandings[i];
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${i + 1}</td>
+      <td>${row.name}</td>
+      <td>${row.btScore.toFixed(1)}</td>
+      <td>${(eloById.get(row.id) ?? 1500).toFixed(1)}</td>
+      <td>${row.wins}</td>
+      <td>${row.losses}</td>
+      <td>${row.draws}</td>
+      <td>${formatPercent(row.winRate)}</td>
+    `;
+    dom.preferenceTableBody.appendChild(tr);
+  }
+
+  const matrix = buildHeadToHead(currentPresets, relevantPreference);
+  const matrixTable = document.createElement("table");
+  matrixTable.className = "matrix";
+
+  const header = document.createElement("tr");
+  header.innerHTML = `<th>Preset</th>${currentPresets.map((preset) => `<th>${preset.name}</th>`).join("")}`;
+  matrixTable.appendChild(header);
+
+  let testedPairs = 0;
+  let significantPairs = 0;
+
+  for (let rowIndex = 0; rowIndex < currentPresets.length; rowIndex += 1) {
+    const rowPreset = currentPresets[rowIndex];
+    const tr = document.createElement("tr");
+    const cells = [];
+
+    for (let colIndex = 0; colIndex < currentPresets.length; colIndex += 1) {
+      const colPreset = currentPresets[colIndex];
+      if (rowPreset.id === colPreset.id) {
+        cells.push("<td>-</td>");
+        continue;
+      }
+
+      const cell = matrix.get(rowPreset.id).get(colPreset.id);
+      const decisiveOutcomes = cell.wins + cell.losses;
+      const hasDecisiveOutcomes = decisiveOutcomes > 0;
+      const pValue = hasDecisiveOutcomes ? pairPreferencePValue(cell) : 1;
+      const pText = hasDecisiveOutcomes ? pValue.toFixed(4) : "--";
+      const significant = hasDecisiveOutcomes && isSignificant(pValue);
+
+      if (colIndex > rowIndex && hasDecisiveOutcomes) {
+        testedPairs += 1;
+        if (significant) {
+          significantPairs += 1;
+        }
+      }
+
+      cells.push(`
+        <td>
+          <span>${cell.wins}-${cell.losses}-${cell.draws}</span>
+          <span class="cell-meta${significant ? " cell-significant" : ""}">p=${pText}</span>
+        </td>
+      `);
+    }
+
+    tr.innerHTML = `<th>${rowPreset.name}</th>${cells.join("")}`;
+    matrixTable.appendChild(tr);
+  }
+
+  dom.headToHeadWrap.innerHTML = "";
+  dom.headToHeadWrap.appendChild(matrixTable);
+
+  if (testedPairs === 0) {
+    dom.significanceSummary.textContent = "No pairwise data yet for significance testing.";
+    dom.significanceRecommendation.textContent = "";
+  } else {
+    dom.significanceSummary.textContent = `${significantPairs} of ${testedPairs} pairs reached statistical significance.`;
+    const coverage = significantPairs / testedPairs;
+    dom.significanceRecommendation.textContent = coverage < 0.5 ? "Run more total matchups to improve confidence." : "";
+  }
+
+  const relevantAbx = state.store.abxRuns
+    .filter((run) => run.selectionKey === state.selectionKey)
+    .slice()
+    .reverse();
+
+  dom.abxResultsSection.classList.toggle("hidden", relevantAbx.length === 0);
+  dom.abxTableBody.innerHTML = "";
+  for (const run of relevantAbx) {
+    const pair = state.abxPairs.find((item) => item.id === run.pairId);
+    const runAccuracy = accuracy(run.correct, run.totalTrials);
+    const pValue = binomialTailProbability(run.correct, run.totalTrials, 0.5);
+
+    const tr = document.createElement("tr");
+    tr.classList.toggle("significant", isSignificant(pValue));
+    tr.innerHTML = `
+      <td>${pair?.label ?? run.pairId}</td>
+      <td>${run.correct}/${run.totalTrials}</td>
+      <td>${formatPercent(runAccuracy)}</td>
+      <td>${pValue.toFixed(4)}</td>
+      <td>${new Date(run.timestamp).toLocaleString()}</td>
+    `;
+    dom.abxTableBody.appendChild(tr);
+  }
+
+  dom.resultsTitle.textContent = `Results for ${currentPresets.length} presets`;
+}
+
+function getSelectedPresetIdsFromSetup() {
+  return [...dom.presetList.querySelectorAll(".preset-chip.is-selected")]
+    .map((chip) => chip.dataset.presetId)
+    .filter(Boolean);
+}
+
+function inferRoundPlanFromValue(value) {
+  if (value === getRoundPlanMatchups("quick")) {
+    return "quick";
+  }
+  if (value === getRoundPlanMatchups("standard")) {
+    return "standard";
+  }
+  if (value === getRoundPlanMatchups("rigorous")) {
+    return "rigorous";
+  }
+  return "custom";
+}
+
+function setSelectedMatchups(matchups, explicitPlan = null) {
+  const pairCount = pairCountForPresetCount(getSelectedPresetIdsFromSetup().length);
+  const minimumMatchups = pairCount > 0 ? pairCount : 1;
+  const safeMatchups = Number.isFinite(matchups) && matchups > 0
+    ? Math.round(matchups)
+    : getRoundPlanMatchups("standard");
+  state.selectedMatchups = Math.max(minimumMatchups, safeMatchups);
+  state.selectedRoundPlan = explicitPlan ?? inferRoundPlanFromValue(state.selectedMatchups);
+  dom.roundsCustomInput.value = String(state.selectedMatchups);
+  updateRoundSelectorUi();
+}
+
+function updateRoundSelectorUi() {
+  const selectedPresetCount = getSelectedPresetIdsFromSetup().length;
+  const pairCount = pairCountForPresetCount(selectedPresetCount);
+  recomputeRoundPlanSuggestions(selectedPresetCount);
+
+  if (state.selectedRoundPlan !== "custom") {
+    const planMatchups = getRoundPlanMatchups(state.selectedRoundPlan);
+    state.selectedMatchups = planMatchups;
+  }
+
+  const minimumMatchups = pairCount > 0 ? pairCount : 1;
+  state.selectedMatchups = Math.max(minimumMatchups, state.selectedMatchups);
+  dom.roundsCustomInput.min = String(minimumMatchups);
+  dom.roundsCustomInput.value = String(state.selectedMatchups);
+
+  const quickMatchups = getRoundPlanMatchups("quick");
+  const standardMatchups = getRoundPlanMatchups("standard");
+  const rigorousMatchups = getRoundPlanMatchups("rigorous");
+
+  const describeTier = (tier, totalMatchups) => `${ROUND_PLAN_TIERS[tier].label} - ${totalMatchups} matchups`;
+
+  dom.roundsQuickBtn.textContent = describeTier("quick", quickMatchups);
+  dom.roundsStandardBtn.textContent = describeTier("standard", standardMatchups);
+  dom.roundsRigorousBtn.textContent = describeTier("rigorous", rigorousMatchups);
+
+  dom.roundsQuickBtn.classList.toggle("is-selected", state.selectedRoundPlan === "quick");
+  dom.roundsStandardBtn.classList.toggle("is-selected", state.selectedRoundPlan === "standard");
+  dom.roundsRigorousBtn.classList.toggle("is-selected", state.selectedRoundPlan === "rigorous");
+
+  if (pairCount === 0) {
+    dom.roundsSummary.textContent = "Select at least two presets to estimate matchups.";
+    return;
+  }
+
+  dom.roundsSummary.textContent = `First ${pairCount} matchups cover all pairs once. Remaining matchups adaptively target the closest-ranked presets for maximum information.`;
+}
+
+function renderPresetChecklist() {
+  dom.presetList.innerHTML = "";
+
+  for (const preset of state.presets) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "preset-chip";
+    chip.dataset.presetId = preset.id;
+    chip.textContent = preset.name;
+
+    const selectedByDefault = preset.id !== NO_EQ_ID;
+    chip.classList.toggle("is-selected", selectedByDefault);
+    chip.setAttribute("aria-pressed", selectedByDefault ? "true" : "false");
+
+    chip.addEventListener("click", () => {
+      const nextSelected = !chip.classList.contains("is-selected");
+      chip.classList.toggle("is-selected", nextSelected);
+      chip.setAttribute("aria-pressed", nextSelected ? "true" : "false");
+      state.selectedPresetIds = getSelectedPresetIdsFromSetup();
+      updateRoundSelectorUi();
+    });
+
+    dom.presetList.appendChild(chip);
+  }
+
+  state.selectedPresetIds = getSelectedPresetIdsFromSetup();
+  updateRoundSelectorUi();
+}
+
+function renderTrackSelects() {
+  const selectNodes = [dom.setupTrackSelect, dom.prefTrackSelect, dom.abxTrackSelect];
+
+  for (const select of selectNodes) {
+    select.innerHTML = "";
+    for (const track of state.tracks) {
+      const option = document.createElement("option");
+      option.value = track;
+      option.textContent = track;
+      select.appendChild(option);
+    }
+  }
+
+  if (!state.selectedTrack && state.tracks.length > 0) {
+    state.selectedTrack = state.tracks[0];
+  }
+
+  dom.setupTrackSelect.value = state.selectedTrack;
+  dom.prefTrackSelect.value = state.selectedTrack;
+  dom.abxTrackSelect.value = state.selectedTrack;
+}
+
+function renderAbxPairSelect() {
+  dom.abxPairSelect.innerHTML = "";
+  for (const pair of state.abxPairs) {
+    const option = document.createElement("option");
+    option.value = pair.id;
+    option.textContent = pair.label;
+    dom.abxPairSelect.appendChild(option);
+  }
+}
+
+async function prepareTrackForSelection() {
+  const token = state.prepareToken + 1;
+  state.prepareToken = token;
+
+  const activePresets = listCurrentPresets();
+  if (activePresets.length < 2) {
+    throw new Error("Select at least two presets.");
+  }
+  if (!state.selectedTrack) {
+    throw new Error("Select a track first.");
+  }
+
+  audio.stop();
+  showScreen("loading");
+  dom.loadingText.textContent = "Preparing audio...";
+  dom.loadingBar.style.width = "0%";
+
+  const trackUrl = `/music/${encodeURIComponent(state.selectedTrack)}`;
+  const result = await audio.prepareTrack({
+    trackUrl,
+    presets: activePresets,
+    onProgress: ({ done, total, message }) => {
+      if (token !== state.prepareToken) {
+        return;
+      }
+      const ratio = total > 0 ? done / total : 0;
+      dom.loadingBar.style.width = `${Math.round(ratio * 100)}%`;
+      dom.loadingText.textContent = `${message} (${done}/${total})`;
+    },
+  });
+
+  if (token !== state.prepareToken) {
+    return;
+  }
+
+  audio.setVariants(result.variants);
+}
+
+function loadCurrentPair({ autoPlay = false } = {}) {
+  const pair = state.currentPreferencePair;
+  if (!pair) {
+    return;
+  }
+
+  audio.setActiveVariant(pair.presetA);
+  setActiveButton(dom.buttonA, true);
+  setActiveButton(dom.buttonB, false);
+  if (autoPlay) {
+    audio.play();
+  }
+  updatePreferenceUi();
+}
+
+async function showPreferenceCompleteInterstitial() {
+  dom.roundCompleteTitle.textContent = "Preference Test Complete";
+  dom.roundCompleteText.textContent = "Calculating results...";
+
+  showScreen("roundComplete");
+  await delay(ROUND_COMPLETE_MS);
+  if (state.mode !== "preference") {
+    return;
+  }
+
+  audio.stop();
+  renderResults();
+  showScreen("results");
+}
+
+function persistPreferenceMatch(choice, pair) {
+  const scoreA = choice === "A" ? 1 : choice === "B" ? 0 : 0.5;
+  const phase = state.preferenceScheduler?.progress.phase === "refinement" ? "refinement" : "discovery";
+  const matchupNumber = state.activePreferenceMatches.length + 1;
+  const match = {
+    selectionKey: state.selectionKey,
+    presetA: pair.presetA,
+    presetB: pair.presetB,
+    scoreA,
+    choice,
+    track: state.selectedTrack,
+    phase,
+    matchupNumber,
+    timestamp: Date.now(),
+  };
+
+  state.store.preferenceMatches.push(match);
+  state.activePreferenceMatches.push(match);
+  saveStore();
+}
+
+async function advancePreference(choice, selectedButton) {
+  const pair = state.currentPreferencePair;
+  if (!pair || state.isAdvancingPreference) {
+    return;
+  }
+
+  state.isAdvancingPreference = true;
+  setPreferenceButtonsEnabled(false);
+  persistPreferenceMatch(choice, pair);
+
+  if (selectedButton) {
+    selectedButton.classList.add("verdict-flash");
+  }
+
+  try {
+    await delay(120);
+    if (!isPreferenceScreenActive()) {
+      return;
+    }
+
+    if (selectedButton) {
+      selectedButton.classList.remove("verdict-flash");
+    }
+
+    clearPreferenceActiveButtons();
+    dom.preferenceStage.classList.add("is-fading");
+    await delay(TRANSITION_MS);
+    if (!isPreferenceScreenActive()) {
+      return;
+    }
+
+    const nextPair = state.preferenceScheduler?.next(state.activePreferenceMatches) ?? null;
+    state.currentPreferencePair = nextPair;
+
+    if (!nextPair) {
+      dom.preferenceStage.classList.remove("is-fading");
+      await showPreferenceCompleteInterstitial();
+      return;
+    }
+
+    audio.setActiveVariant(nextPair.presetA);
+    setActiveButton(dom.buttonA, true);
+    setActiveButton(dom.buttonB, false);
+    updatePreferenceUi();
+    dom.preferenceStage.classList.remove("is-fading");
+    const progress = state.preferenceScheduler?.progress;
+    if (progress && progress.done < progress.total) {
+      showPreferenceToast(`Matchup ${progress.done + 1} of ${progress.total}`);
+    }
+    await delay(TRANSITION_MS);
+    if (!isPreferenceScreenActive()) {
+      return;
+    }
+    updatePreferenceUi();
+  } finally {
+    state.isAdvancingPreference = false;
+    dom.preferenceStage.classList.remove("is-fading");
+    if (selectedButton) {
+      selectedButton.classList.remove("verdict-flash");
+    }
+    if (isPreferenceScreenActive()) {
+      updatePreferenceUi();
+    }
+  }
+}
+
+async function startPreferenceMode() {
+  setSetupError("");
+  state.selectedPresetIds = getSelectedPresetIdsFromSetup();
+  state.selectedTrack = dom.setupTrackSelect.value;
+
+  if (state.selectedPresetIds.length < 2) {
+    setSetupError("Select at least two presets.");
+    return;
+  }
+
+  const requestedMatchups = Number.parseInt(dom.roundsCustomInput.value, 10);
+  const pairCount = pairCountForPresetCount(state.selectedPresetIds.length);
+  recomputeRoundPlanSuggestions(state.selectedPresetIds.length);
+  state.selectedMatchups = Number.isFinite(requestedMatchups) && requestedMatchups > 0
+    ? requestedMatchups
+    : getRoundPlanMatchups("standard");
+  state.selectedMatchups = Math.max(pairCount, state.selectedMatchups);
+  dom.roundsCustomInput.value = String(state.selectedMatchups);
+  state.selectedRoundPlan = inferRoundPlanFromValue(state.selectedMatchups);
+
+  state.selectionKey = getSelectionKey(state.selectedPresetIds);
+  state.mode = "preference";
+  state.preferenceScheduler = new MatchupScheduler(state.selectedPresetIds, state.selectedMatchups);
+  state.activePreferenceMatches = [];
+  state.currentPreferencePair = state.preferenceScheduler.next(state.activePreferenceMatches);
+  state.abxPairs = buildAbxPairs(state.selectedPresetIds);
+  state.isAdvancingPreference = false;
+
+  dom.prefTrackSelect.value = state.selectedTrack;
+  dom.abxTrackSelect.value = state.selectedTrack;
+
+  await prepareTrackForSelection();
+  showScreen("preference");
+  loadCurrentPair({ autoPlay: true });
+  const progress = state.preferenceScheduler.progress;
+  if (progress.total > 0 && !state.preferenceScheduler.isComplete) {
+    showPreferenceToast(`Matchup ${progress.done + 1} of ${progress.total}`);
+  }
+}
+
+async function startAbxMode() {
+  setSetupError("");
+  state.selectedPresetIds = getSelectedPresetIdsFromSetup();
+  state.selectedTrack = dom.setupTrackSelect.value;
+
+  if (state.selectedPresetIds.length < 2) {
+    setSetupError("Select at least two presets.");
+    return;
+  }
+
+  state.selectionKey = getSelectionKey(state.selectedPresetIds);
+  state.mode = "abx";
+  state.abxPairs = buildAbxPairs(state.selectedPresetIds);
+  state.abxRun = null;
+  state.abxListeningTarget = "A";
+
+  renderAbxPairSelect();
+  dom.prefTrackSelect.value = state.selectedTrack;
+  dom.abxTrackSelect.value = state.selectedTrack;
+
+  await prepareTrackForSelection();
+  showScreen("abx");
+  updateAbxUi();
+}
+
+function switchPreferenceSide(side) {
+  if (state.isAdvancingPreference) {
+    return;
+  }
+
+  const pair = state.currentPreferencePair;
+  if (!pair) {
+    return;
+  }
+
+  if (side === "A") {
+    audio.setActiveVariant(pair.presetA);
+  } else {
+    audio.setActiveVariant(pair.presetB);
+  }
+}
+
+function startAbxRun() {
+  const pairId = dom.abxPairSelect.value;
+  const pair = state.abxPairs.find((item) => item.id === pairId);
+  if (!pair) {
+    return;
+  }
+
+  const parsedTrials = Number.parseInt(dom.abxTrialCount.value, 10);
+  const totalTrials = Number.isFinite(parsedTrials) && parsedTrials > 0 ? parsedTrials : 16;
+  dom.abxTrialCount.value = String(totalTrials);
+
+  state.abxRun = {
+    pairId,
+    aId: pair.aId,
+    bId: pair.bId,
+    totalTrials,
+    trialIndex: 0,
+    correct: 0,
+    xIs: Math.random() < 0.5 ? "A" : "B",
+  };
+
+  state.abxListeningTarget = "A";
+  audio.setActiveVariant(pair.aId);
+  audio.play();
+  updateAbxUi();
+}
+
+function listenAbx(target, autoPlay = false) {
+  const run = state.abxRun;
+  if (!run) {
+    return;
+  }
+
+  state.abxListeningTarget = target;
+
+  if (target === "A") {
+    audio.setActiveVariant(run.aId);
+  } else if (target === "B") {
+    audio.setActiveVariant(run.bId);
+  } else {
+    audio.setActiveVariant(run.xIs === "A" ? run.aId : run.bId);
+  }
+
+  if (autoPlay) {
+    audio.play();
+  }
+  updateAbxUi();
+}
+
+function guessAbx(guess) {
+  const run = state.abxRun;
+  if (!run || run.trialIndex >= run.totalTrials) {
+    return;
+  }
+
+  const nextStep = advanceAbxRunTrial(run, guess);
+
+  if (nextStep.isComplete) {
+    state.store.abxRuns.push({
+      selectionKey: state.selectionKey,
+      pairId: run.pairId,
+      aId: run.aId,
+      bId: run.bId,
+      track: state.selectedTrack,
+      correct: run.correct,
+      totalTrials: run.totalTrials,
+      timestamp: Date.now(),
+    });
+    saveStore();
+  } else {
+    state.abxListeningTarget = nextStep.listeningTarget;
+    audio.setActiveVariant(nextStep.variantId);
+  }
+
+  updateAbxUi();
+}
+
+async function handleTrackChange(track) {
+  if (!track || track === state.selectedTrack) {
+    return;
+  }
+
+  const shouldResume = audio.getState().isPlaying;
+
+  state.selectedTrack = track;
+  dom.setupTrackSelect.value = track;
+  dom.prefTrackSelect.value = track;
+  dom.abxTrackSelect.value = track;
+
+  try {
+    await prepareTrackForSelection();
+    if (state.mode === "preference") {
+      loadCurrentPair({ autoPlay: shouldResume });
+      showScreen("preference");
+    } else if (state.mode === "abx") {
+      if (state.abxRun) {
+        listenAbx(state.abxListeningTarget, shouldResume);
+      }
+      showScreen("abx");
+      updateAbxUi();
+    }
+  } catch (error) {
+    setSetupError(error instanceof Error ? error.message : String(error));
+    showScreen("setup");
+  }
+}
+
+function applyDefaultLoopRegion() {
+  const playback = audio.getState();
+  const duration = playback.duration || 0;
+  if (!(duration > 0)) {
+    return;
+  }
+
+  const current = playback.currentTime || 0;
+  const startTime = Math.max(0, Math.min(duration, current));
+  const endTime = Math.min(duration, startTime + LOOP_DEFAULT_SECONDS);
+  const range = clampLoopRange(startTime, endTime, duration);
+  audio.setLoopRegion(range.startTime, range.endTime);
+}
+
+function toggleLoopEnabled() {
+  const loop = audio.getLoopState();
+  if (loop.enabled) {
+    audio.setLoopEnabled(false);
+    return;
+  }
+
+  applyDefaultLoopRegion();
+  audio.setLoopEnabled(true);
+}
+
+function getSeekTimeForClientX(clientX) {
+  const duration = audio.getState().duration || 0;
+  if (!(duration > 0)) {
+    return 0;
+  }
+
+  const rect = dom.seekSlider.getBoundingClientRect();
+  if (!(rect.width > 0)) {
+    return 0;
+  }
+
+  const ratio = (clientX - rect.left) / rect.width;
+  const clampedRatio = Math.min(1, Math.max(0, ratio));
+  return clampedRatio * duration;
+}
+
+function setLoopBoundary(handle, rawTime) {
+  const duration = audio.getState().duration || 0;
+  if (!(duration > 0)) {
+    return;
+  }
+
+  const loop = audio.getLoopState();
+  const currentRange = clampLoopRange(loop.startTime, loop.endTime, duration);
+  const minimumLength = getLoopMinLength(duration);
+
+  let nextStart = currentRange.startTime;
+  let nextEnd = currentRange.endTime;
+
+  if (handle === "start") {
+    const upperBound = Math.max(0, nextEnd - minimumLength);
+    nextStart = Math.min(Math.max(0, rawTime), upperBound);
+  } else {
+    const lowerBound = Math.min(duration, nextStart + minimumLength);
+    nextEnd = Math.max(Math.min(duration, rawTime), lowerBound);
+  }
+
+  audio.setLoopRegion(nextStart, nextEnd);
+}
+
+function setLoopBoundaryFromCurrentTime(handle) {
+  const playback = audio.getState();
+  const duration = playback.duration || 0;
+  if (!(duration > 0)) {
+    return;
+  }
+
+  const loop = audio.getLoopState();
+  const currentTime = Math.max(0, Math.min(duration, playback.currentTime || 0));
+  if (!loop.enabled) {
+    applyDefaultLoopRegion();
+    audio.setLoopEnabled(true);
+  }
+
+  setLoopBoundary(handle, currentTime);
+}
+
+function handleLoopHandlePointerMove(event) {
+  if (!state.isLoopHandleDragging || !state.loopDragHandle) {
+    return;
+  }
+
+  if (state.loopDragPointerId !== null && event.pointerId !== state.loopDragPointerId) {
+    return;
+  }
+
+  event.preventDefault();
+  const nextTime = getSeekTimeForClientX(event.clientX);
+  setLoopBoundary(state.loopDragHandle, nextTime);
+}
+
+function stopLoopHandleDrag(event) {
+  if (state.loopDragPointerId !== null && event?.pointerId !== undefined && event.pointerId !== state.loopDragPointerId) {
+    return;
+  }
+
+  state.isLoopHandleDragging = false;
+  state.loopDragHandle = null;
+  state.loopDragPointerId = null;
+  dom.loopHandleStart.classList.remove("is-dragging");
+  dom.loopHandleEnd.classList.remove("is-dragging");
+  window.removeEventListener("pointermove", handleLoopHandlePointerMove);
+  window.removeEventListener("pointerup", stopLoopHandleDrag);
+  window.removeEventListener("pointercancel", stopLoopHandleDrag);
+}
+
+function startLoopHandleDrag(event) {
+  const handle = event.currentTarget?.dataset?.handle;
+  if (handle !== "start" && handle !== "end") {
+    return;
+  }
+
+  if (state.isLoopHandleDragging) {
+    stopLoopHandleDrag();
+  }
+
+  if (!audio.getLoopState().enabled) {
+    return;
+  }
+
+  event.preventDefault();
+  state.isLoopHandleDragging = true;
+  state.loopDragHandle = handle;
+  state.loopDragPointerId = event.pointerId;
+  dom.loopHandleStart.classList.toggle("is-dragging", handle === "start");
+  dom.loopHandleEnd.classList.toggle("is-dragging", handle === "end");
+
+  window.addEventListener("pointermove", handleLoopHandlePointerMove);
+  window.addEventListener("pointerup", stopLoopHandleDrag);
+  window.addEventListener("pointercancel", stopLoopHandleDrag);
+
+  setLoopBoundary(handle, getSeekTimeForClientX(event.clientX));
+}
+
+function handleKeyboard(event) {
+  const target = event.target;
+  if (target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) {
+    return;
+  }
+
+  const key = event.key.toLowerCase();
+
+  if (key === " " || key === "spacebar") {
+    event.preventDefault();
+    if (audio.getState().isPlaying) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+    return;
+  }
+
+  if (key === "arrowleft") {
+    event.preventDefault();
+    audio.skip(-5);
+    return;
+  }
+
+  if (key === "arrowright") {
+    event.preventDefault();
+    audio.skip(5);
+    return;
+  }
+
+  if (key === "l") {
+    event.preventDefault();
+    toggleLoopEnabled();
+    return;
+  }
+
+  if (event.key === "[") {
+    event.preventDefault();
+    setLoopBoundaryFromCurrentTime("start");
+    return;
+  }
+
+  if (event.key === "]") {
+    event.preventDefault();
+    setLoopBoundaryFromCurrentTime("end");
+    return;
+  }
+
+  if (state.mode === "preference" && !dom.preferenceScreen.classList.contains("hidden")) {
+    if (key === "1" || key === "a") {
+      switchPreferenceSide("A");
+    } else if (key === "2" || key === "b") {
+      switchPreferenceSide("B");
+    } else if (key === "z") {
+      advancePreference("A", dom.preferA);
+    } else if (key === "x") {
+      advancePreference("draw", dom.tie);
+    } else if (key === "c") {
+      advancePreference("B", dom.preferB);
+    }
+    return;
+  }
+
+  if (state.mode === "abx" && !dom.abxScreen.classList.contains("hidden")) {
+    if (key === "1" || key === "a") {
+      listenAbx("A");
+    } else if (key === "2" || key === "b") {
+      listenAbx("B");
+    } else if (key === "3" || key === "x") {
+      listenAbx("X");
+    } else if (key === "z") {
+      guessAbx("A");
+    } else if (key === "c") {
+      guessAbx("B");
+    }
+  }
+}
+
+async function loadInitialData() {
+  const [presetsResponse, tracksResponse] = await Promise.all([
+    fetch("/api/presets"),
+    fetch("/api/tracks"),
+  ]);
+
+  if (!presetsResponse.ok) {
+    const body = await presetsResponse.json().catch(() => ({}));
+    throw new Error(body.error || "Failed to load presets.");
+  }
+
+  if (!tracksResponse.ok) {
+    const body = await tracksResponse.json().catch(() => ({}));
+    throw new Error(body.error || "Failed to load tracks.");
+  }
+
+  const presets = await presetsResponse.json();
+  const tracks = await tracksResponse.json();
+
+  const noEqPreset = {
+    id: NO_EQ_ID,
+    name: "No EQ",
+    filename: "no-eq",
+    preampDb: 0,
+    filters: [],
+  };
+
+  state.presets = [
+    ...presets.map((preset) => ({
+      ...preset,
+      id: preset.filename,
+    })),
+    noEqPreset,
+  ];
+  state.tracks = tracks;
+  state.selectedTrack = tracks[0] ?? "";
+
+  renderPresetChecklist();
+  renderTrackSelects();
+  setSelectedMatchups(getRoundPlanMatchups("standard"), "standard");
+}
+
+function attachEvents() {
+  dom.startPreferenceBtn.addEventListener("click", async () => {
+    try {
+      await audio.ensureContext();
+      await startPreferenceMode();
+    } catch (error) {
+      setSetupError(error instanceof Error ? error.message : String(error));
+      showScreen("setup");
+    }
+  });
+
+  dom.startAbxBtn.addEventListener("click", async () => {
+    try {
+      await audio.ensureContext();
+      await startAbxMode();
+    } catch (error) {
+      setSetupError(error instanceof Error ? error.message : String(error));
+      showScreen("setup");
+    }
+  });
+
+  dom.roundsQuickBtn.addEventListener("click", () => {
+    setSelectedMatchups(getRoundPlanMatchups("quick"), "quick");
+  });
+
+  dom.roundsStandardBtn.addEventListener("click", () => {
+    setSelectedMatchups(getRoundPlanMatchups("standard"), "standard");
+  });
+
+  dom.roundsRigorousBtn.addEventListener("click", () => {
+    setSelectedMatchups(getRoundPlanMatchups("rigorous"), "rigorous");
+  });
+
+  dom.roundsCustomInput.addEventListener("input", () => {
+    const parsed = Number.parseInt(dom.roundsCustomInput.value, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return;
+    }
+    setSelectedMatchups(parsed);
+  });
+
+  dom.backToSetup.addEventListener("click", () => {
+    audio.stop();
+    state.mode = null;
+    state.preferenceScheduler = null;
+    state.currentPreferencePair = null;
+    state.activePreferenceMatches = [];
+    showScreen("setup");
+  });
+
+  dom.prefTrackSelect.addEventListener("change", (event) => {
+    if (event.target instanceof HTMLSelectElement) {
+      handleTrackChange(event.target.value);
+    }
+  });
+
+  dom.abxTrackSelect.addEventListener("change", (event) => {
+    if (event.target instanceof HTMLSelectElement) {
+      handleTrackChange(event.target.value);
+    }
+  });
+
+  dom.setupTrackSelect.addEventListener("change", (event) => {
+    if (!(event.target instanceof HTMLSelectElement)) {
+      return;
+    }
+    state.selectedTrack = event.target.value;
+    dom.prefTrackSelect.value = state.selectedTrack;
+    dom.abxTrackSelect.value = state.selectedTrack;
+  });
+
+  dom.buttonA.addEventListener("click", () => switchPreferenceSide("A"));
+  dom.buttonB.addEventListener("click", () => switchPreferenceSide("B"));
+  dom.preferA.addEventListener("click", () => advancePreference("A", dom.preferA));
+  dom.tie.addEventListener("click", () => advancePreference("draw", dom.tie));
+  dom.preferB.addEventListener("click", () => advancePreference("B", dom.preferB));
+
+  dom.abxStartRun.addEventListener("click", () => startAbxRun());
+  dom.abxSwitchA.addEventListener("click", () => listenAbx("A"));
+  dom.abxSwitchB.addEventListener("click", () => listenAbx("B"));
+  dom.abxSwitchX.addEventListener("click", () => listenAbx("X"));
+  dom.abxGuessA.addEventListener("click", () => guessAbx("A"));
+  dom.abxGuessB.addEventListener("click", () => guessAbx("B"));
+
+  dom.restartBtn.addEventListener("click", () => audio.restart());
+  dom.rewindBtn.addEventListener("click", () => audio.skip(-5));
+  dom.forwardBtn.addEventListener("click", () => audio.skip(5));
+  dom.playPauseBtn.addEventListener("click", () => {
+    if (audio.getState().isPlaying) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+  });
+
+  dom.loopToggleBtn.addEventListener("click", () => {
+    toggleLoopEnabled();
+  });
+
+  dom.loopHandleStart.addEventListener("pointerdown", startLoopHandleDrag);
+  dom.loopHandleEnd.addEventListener("pointerdown", startLoopHandleDrag);
+
+  dom.seekSlider.addEventListener("pointerdown", () => {
+    state.isSeekDragging = true;
+  });
+
+  dom.seekSlider.addEventListener("pointerup", () => {
+    state.isSeekDragging = false;
+    audio.seek(Number(dom.seekSlider.value));
+  });
+
+  dom.seekSlider.addEventListener("input", () => {
+    if (state.isSeekDragging) {
+      const value = Number(dom.seekSlider.value);
+      const duration = Number(dom.seekSlider.max) || 0;
+      dom.timeLabel.textContent = `${formatTime(value)} / ${formatTime(duration)}`;
+    } else {
+      audio.seek(Number(dom.seekSlider.value));
+    }
+  });
+
+  dom.volumeSlider.addEventListener("input", () => {
+    audio.setVolume(Number(dom.volumeSlider.value));
+  });
+
+  dom.anotherRoundBtn.addEventListener("click", () => {
+    if (state.selectedPresetIds.length < 2) {
+      showScreen("setup");
+      return;
+    }
+
+    state.mode = "preference";
+    state.preferenceScheduler = new MatchupScheduler(state.selectedPresetIds, state.selectedMatchups);
+    state.activePreferenceMatches = [];
+    state.currentPreferencePair = state.preferenceScheduler.next(state.activePreferenceMatches);
+    state.isAdvancingPreference = false;
+    showScreen("preference");
+    loadCurrentPair({ autoPlay: true });
+    const progress = state.preferenceScheduler.progress;
+    if (!state.preferenceScheduler.isComplete) {
+      showPreferenceToast(`Matchup ${progress.done + 1} of ${progress.total}`);
+    }
+  });
+
+  dom.resultsSetupBtn.addEventListener("click", () => {
+    audio.stop();
+    state.mode = null;
+    state.preferenceScheduler = null;
+    state.currentPreferencePair = null;
+    state.activePreferenceMatches = [];
+    showScreen("setup");
+  });
+
+  audio.addEventListener("state", () => {
+    updatePlaybackUi();
+    if (state.mode === "preference") {
+      updatePreferenceUi();
+    }
+    if (state.mode === "abx") {
+      updateAbxUi();
+    }
+  });
+
+  document.addEventListener("keydown", handleKeyboard);
+}
+
+function startRenderLoop() {
+  function frame() {
+    updatePlaybackUi();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+async function init() {
+  loadStore();
+  attachEvents();
+  updatePlaybackUi();
+  showScreen("setup");
+
+  try {
+    await loadInitialData();
+  } catch (error) {
+    setSetupError(error instanceof Error ? error.message : String(error));
+  }
+
+  startRenderLoop();
+}
+
+init();

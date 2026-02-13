@@ -1,0 +1,15 @@
+# Audio files (personal test tracks)
+music/
+
+# Personal EQ presets
+presets_for_shootout/
+legacy_eq_presets/
+legacy_eq_profiles/
+
+# Bun / Node
+node_modules/
+bun.lock
+
+# OS
+.DS_Store
+Thumbs.db

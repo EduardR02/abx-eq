@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ABX EQ Shootout</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>ABX EQ Shootout</h1>
+          <p class="subtitle">Blind A/B preference and ABX identification</p>
+        </div>
+        <button id="back-to-setup" class="secondary hidden">Back To Setup</button>
+      </header>
+
+      <main>
+        <section id="setup-screen" class="panel">
+          <h2>Setup</h2>
+          <p class="section-copy">Choose presets, a track, and how rigorous you want the preference run to be.</p>
+          <div id="setup-error" class="error hidden"></div>
+
+          <div class="setup-grid">
+            <div class="setup-column">
+              <h3>EQ Presets</h3>
+              <div id="preset-list" class="preset-list"></div>
+            </div>
+
+            <div class="setup-column">
+              <h3>Track</h3>
+              <select id="track-select-setup"></select>
+
+              <div class="rounds-panel">
+                <h3>Preference Matchups</h3>
+                <div class="rounds-options">
+                  <button id="rounds-quick" class="round-chip" type="button"></button>
+                  <button id="rounds-standard" class="round-chip" type="button"></button>
+                  <button id="rounds-rigorous" class="round-chip" type="button"></button>
+                </div>
+                <label for="rounds-custom" class="field-label">Custom total matchups</label>
+                <input id="rounds-custom" type="number" min="1" step="1" value="21" />
+                <p id="rounds-summary" class="meta"></p>
+              </div>
+
+              <div class="actions stacked">
+                <button id="start-preference" class="primary">Prepare and Start Preference Test</button>
+                <button id="start-abx" class="secondary">Prepare and Start ABX Test</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="loading-screen" class="panel hidden">
+          <h2>Preparing Audio</h2>
+          <p id="loading-text">Preparing...</p>
+          <div class="progress-track">
+            <div id="loading-bar" class="progress-bar"></div>
+          </div>
+        </section>
+
+        <section id="preference-screen" class="panel hidden">
+          <div class="screen-head">
+            <h2>Preference Test</h2>
+            <label class="select-label">
+              Track
+              <select id="track-select-preference"></select>
+            </label>
+          </div>
+
+          <div id="preference-stage" class="preference-stage">
+            <h3 id="matchup-text">A vs B</h3>
+            <p id="matchup-meta" class="meta"></p>
+
+            <div class="ab-buttons two">
+              <button id="switch-a" class="ab-switch">A</button>
+              <button id="switch-b" class="ab-switch">B</button>
+            </div>
+
+            <div class="verdict-row">
+              <button id="prefer-a" class="primary">I prefer A</button>
+              <button id="prefer-draw" class="secondary">
+                It's a tie
+                <span class="btn-hint">(0.5 win each)</span>
+              </button>
+              <button id="prefer-b" class="primary">I prefer B</button>
+            </div>
+          </div>
+
+          <p id="preference-progress" class="meta"></p>
+          
+          <div class="shortcuts-legend">
+            <span class="legend-label">Keyboard:</span>
+            <div class="key-pair"><kbd>1</kbd> A</div>
+            <div class="key-pair"><kbd>2</kbd> B</div>
+            <div class="key-pair"><kbd>Space</kbd> Play</div>
+            <div class="key-pair"><kbd>←/→</kbd> Seek</div>
+            <div class="key-pair"><kbd>L</kbd> Loop</div>
+            <div class="key-pair"><kbd>[</kbd> Loop start</div>
+            <div class="key-pair"><kbd>]</kbd> Loop end</div>
+            <div class="key-pair"><kbd>Z</kbd> Vote A</div>
+            <div class="key-pair"><kbd>X</kbd> Tie</div>
+            <div class="key-pair"><kbd>C</kbd> Vote B</div>
+          </div>
+          
+          <div id="preference-toast" class="toast hidden"></div>
+        </section>
+
+        <section id="round-complete-screen" class="panel hidden">
+          <h2 id="round-complete-title">Round Complete</h2>
+          <p id="round-complete-text" class="section-copy"></p>
+          <div class="round-spinner" aria-hidden="true"></div>
+        </section>
+
+        <section id="abx-screen" class="panel hidden">
+          <div class="screen-head">
+            <h2>ABX Test</h2>
+            <label class="select-label">
+              Track
+              <select id="track-select-abx"></select>
+            </label>
+          </div>
+
+          <div class="abx-setup-row">
+            <label class="select-label">
+              Pair
+              <select id="abx-pair-select"></select>
+            </label>
+            <label class="select-label">
+              Trials
+              <input id="abx-trials" type="number" min="1" step="1" value="16" />
+            </label>
+            <button id="abx-start-run" class="secondary">Start New Run</button>
+          </div>
+
+          <p id="abx-now-text"></p>
+
+          <div class="ab-buttons three">
+            <button id="abx-switch-a" class="ab-switch">A</button>
+            <button id="abx-switch-b" class="ab-switch">B</button>
+            <button id="abx-switch-x" class="ab-switch">X</button>
+          </div>
+
+          <div class="verdict-row two-col">
+            <button id="abx-guess-a" class="primary">X is A</button>
+            <button id="abx-guess-b" class="primary">X is B</button>
+          </div>
+
+          <p id="abx-progress" class="meta"></p>
+          <p id="abx-stats" class="meta"></p>
+          
+          <div class="shortcuts-legend">
+            <span class="legend-label">Keyboard:</span>
+            <div class="key-pair"><kbd>1</kbd> A</div>
+            <div class="key-pair"><kbd>2</kbd> B</div>
+            <div class="key-pair"><kbd>3</kbd> X</div>
+            <div class="key-pair"><kbd>Space</kbd> Play</div>
+            <div class="key-pair"><kbd>L</kbd> Loop</div>
+            <div class="key-pair"><kbd>[</kbd> Loop start</div>
+            <div class="key-pair"><kbd>]</kbd> Loop end</div>
+            <div class="key-pair"><kbd>Z</kbd> Guess A</div>
+            <div class="key-pair"><kbd>C</kbd> Guess B</div>
+          </div>
+        </section>
+
+        <section id="playback-controls" class="panel hidden">
+          <h2 class="visually-hidden">Playback</h2>
+          <div class="controls-row">
+            <div class="transport-group">
+                <button id="restart" class="icon-btn" aria-label="Restart">⏮</button>
+                <button id="rewind" class="icon-btn" aria-label="Rewind 5s">⏪</button>
+                <button id="play-pause" class="icon-btn play-main" aria-label="Play/Pause">▶</button>
+                <button id="forward" class="icon-btn" aria-label="Forward 5s">⏩</button>
+            </div>
+
+            <div class="loop-controls">
+              <button id="loop-toggle" class="icon-btn" aria-label="Toggle loop">🔁</button>
+              <span id="loop-times" class="loop-times hidden">Loop: 0:00 - 0:00</span>
+            </div>
+            
+            <div class="seek-container">
+              <div id="loop-region" class="loop-region hidden"></div>
+              <input id="seek" type="range" min="0" max="1" value="0" step="0.001" />
+              <div id="loop-handle-start" class="loop-handle hidden" data-handle="start" aria-hidden="true"></div>
+              <div id="loop-handle-end" class="loop-handle hidden" data-handle="end" aria-hidden="true"></div>
+            </div>
+            <span id="time-label">0:00 / 0:00</span>
+            
+            <div class="volume-container">
+              <span class="vol-icon">🔊</span>
+              <input id="volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume" />
+            </div>
+          </div>
+        </section>
+
+        <section id="results-screen" class="panel hidden">
+          <h2 id="results-title">Results</h2>
+
+          <h3>Preference Standings (Bradley-Terry Primary)</h3>
+          <p id="scheduling-summary" class="meta"></p>
+          <p id="scheduling-pairs" class="meta"></p>
+          <table>
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Preset</th>
+                <th>BT Score</th>
+                <th>ELO</th>
+                <th>Wins</th>
+                <th>Losses</th>
+                <th>Ties</th>
+                <th>Win Rate</th>
+              </tr>
+            </thead>
+            <tbody id="preference-table-body"></tbody>
+          </table>
+
+          <h3>Head To Head (W-L-T and p-value)</h3>
+          <p id="significance-summary" class="meta"></p>
+          <p id="significance-recommendation" class="meta"></p>
+          <div id="head-to-head-wrap" class="matrix-wrap"></div>
+
+          <section id="abx-results-section" class="results-subsection hidden">
+            <h3>ABX Results</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Pair</th>
+                  <th>Correct</th>
+                  <th>Accuracy</th>
+                  <th>p-value</th>
+                  <th>When</th>
+                </tr>
+              </thead>
+              <tbody id="abx-table-body"></tbody>
+            </table>
+          </section>
+
+          <details class="interpretation">
+            <summary>How to interpret</summary>
+            <div class="interpretation-copy">
+              <p><strong>BT Score</strong> (Bradley-Terry): A strength rating computed from all your pairwise preferences. Higher means preferred more often. Unlike ELO, this is not affected by matchup order.</p>
+              <p><strong>Why fewer matchups can work</strong>: Bradley-Terry shares information across the full comparison graph, so each choice helps refine multiple relative strengths through transitivity.</p>
+              <p><strong>p-value</strong> (head-to-head table): The probability of seeing this result by chance. Highlighted values under 0.05 indicate statistically significant preference.</p>
+              <p><strong>ELO</strong>: A secondary rating system. Useful as a cross-reference, but can be somewhat order dependent.</p>
+              <p><strong>Confidence tip</strong>: If rankings still feel unstable, run more total matchups to improve convergence.</p>
+            </div>
+          </details>
+
+          <div class="actions">
+            <button id="another-round" class="secondary">Run Another Preference Test</button>
+            <button id="results-to-setup" class="primary">Back To Setup</button>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
