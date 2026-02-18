@@ -110,7 +110,7 @@
               <button id="switch-b" class="ab-switch">B</button>
             </div>
 
-            <div class="verdict-row">
+            <div id="verdict-row" class="verdict-row">
               <button id="prefer-a" class="primary">I prefer A</button>
               <button id="prefer-draw" class="secondary">
                 It's a tie
@@ -118,10 +118,24 @@
               </button>
               <button id="prefer-b" class="primary">I prefer B</button>
             </div>
+
+            <div id="revealed-actions" class="verdict-row hidden">
+              <button id="revealed-results" class="primary" type="button">View Results</button>
+              <button id="revealed-setup" class="secondary" type="button">Back to Setup</button>
+            </div>
           </div>
 
           <p id="preference-progress" class="meta"></p>
-          
+
+          <div id="reveal-area" class="reveal-area">
+            <button id="reveal-btn" class="reveal-link" type="button">Reveal presets</button>
+            <div id="reveal-confirm" class="reveal-confirm hidden">
+              <span class="reveal-warning">Revealing ends the test.</span>
+              <button id="reveal-yes" class="reveal-action" type="button">Reveal</button>
+              <button id="reveal-cancel" class="reveal-action" type="button">Cancel</button>
+            </div>
+          </div>
+           
           <div class="shortcuts-legend">
             <span class="legend-label">Keyboard:</span>
             <div class="key-pair"><kbd>1</kbd> A</div>

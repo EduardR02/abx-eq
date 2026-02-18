@@ -12,6 +12,43 @@ describe("blind UI regression checks", () => {
     expect(appSource).not.toContain("dom.matchupMeta.textContent = `A:");
   });
 
+  test("preference screen includes reveal controls and post-reveal actions", () => {
+    expect(htmlSource).toContain('id="reveal-area"');
+    expect(htmlSource).toContain('id="reveal-btn"');
+    expect(htmlSource).toContain('id="reveal-confirm"');
+    expect(htmlSource).toContain('id="reveal-yes"');
+    expect(htmlSource).toContain('id="reveal-cancel"');
+    expect(htmlSource).toContain('id="verdict-row"');
+    expect(htmlSource).toContain('id="revealed-actions"');
+    expect(htmlSource).toContain('id="revealed-results"');
+    expect(htmlSource).toContain('id="revealed-setup"');
+  });
+
+  test("reveal flow preserves A/B listening and ends only voting", () => {
+    expect(appSource).toContain("isRevealed: false,");
+    expect(appSource).toContain("function revealPresets() {");
+    expect(appSource).toContain("dom.verdictRow.classList.add(\"hidden\");");
+    expect(appSource).toContain("dom.revealedActions.classList.remove(\"hidden\");");
+    expect(appSource).toContain("dom.revealArea.classList.add(\"hidden\");");
+    expect(appSource).toContain("switchEnabled: !state.isAdvancingPreference,");
+    expect(appSource).toContain("verdictEnabled: !state.isAdvancingPreference && !state.isRevealed,");
+    expect(appSource).toContain("if (!state.isRevealed) {");
+    expect(appSource).toContain('dom.matchupText.textContent = "A vs B";');
+    expect(appSource).toContain("!state.isRevealed && key === \"z\"");
+    expect(appSource).toContain("!state.isRevealed && key === \"x\"");
+    expect(appSource).toContain("!state.isRevealed && key === \"c\"");
+  });
+
+  test("reveal controls use rose pine visual tokens", () => {
+    expect(styleSource).toContain(".reveal-area");
+    expect(styleSource).toContain(".reveal-link");
+    expect(styleSource).toContain(".reveal-confirm");
+    expect(styleSource).toContain(".reveal-warning");
+    expect(styleSource).toContain(".reveal-action");
+    expect(styleSource).toContain(".revealed-names");
+    expect(styleSource).toContain(".revealed-names .preset-label");
+  });
+
   test("ABX run screen keeps pair labels blinded", () => {
     expect(appSource).toContain('dom.abxNowText.textContent = "Testing pair: A vs B";');
   });

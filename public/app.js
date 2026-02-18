@@ -78,6 +78,7 @@ const state = {
   currentPreferencePair: null,
   activePreferenceMatches: [],
   isAdvancingPreference: false,
+  isRevealed: false,
 
   abxPairs: [],
   abxRun: null,
@@ -137,9 +138,18 @@ const dom = {
   matchupMeta: document.getElementById("matchup-meta"),
   buttonA: document.getElementById("switch-a"),
   buttonB: document.getElementById("switch-b"),
+  verdictRow: document.getElementById("verdict-row"),
   preferA: document.getElementById("prefer-a"),
   tie: document.getElementById("prefer-draw"),
   preferB: document.getElementById("prefer-b"),
+  revealedActions: document.getElementById("revealed-actions"),
+  revealedResults: document.getElementById("revealed-results"),
+  revealedSetup: document.getElementById("revealed-setup"),
+  revealArea: document.getElementById("reveal-area"),
+  revealBtn: document.getElementById("reveal-btn"),
+  revealConfirm: document.getElementById("reveal-confirm"),
+  revealYes: document.getElementById("reveal-yes"),
+  revealCancel: document.getElementById("reveal-cancel"),
   prefProgress: document.getElementById("preference-progress"),
 
   roundCompleteTitle: document.getElementById("round-complete-title"),
@@ -490,12 +500,57 @@ function clearPreferenceActiveButtons() {
   setActiveButton(dom.buttonB, false);
 }
 
-function setPreferenceButtonsEnabled(enabled) {
-  dom.buttonA.disabled = !enabled;
-  dom.buttonB.disabled = !enabled;
-  dom.preferA.disabled = !enabled;
-  dom.tie.disabled = !enabled;
-  dom.preferB.disabled = !enabled;
+function setPreferenceButtonsEnabled({ switchEnabled, verdictEnabled }) {
+  dom.buttonA.disabled = !switchEnabled;
+  dom.buttonB.disabled = !switchEnabled;
+  dom.preferA.disabled = !verdictEnabled;
+  dom.tie.disabled = !verdictEnabled;
+  dom.preferB.disabled = !verdictEnabled;
+}
+
+function resetRevealUi() {
+  state.isRevealed = false;
+  dom.matchupText.classList.remove("revealed-names");
+  dom.revealBtn.classList.remove("hidden");
+  dom.revealConfirm.classList.add("hidden");
+  dom.revealArea.classList.remove("hidden");
+  dom.verdictRow.classList.remove("hidden");
+  dom.revealedActions.classList.add("hidden");
+}
+
+function setRevealedMatchupText(nameA, nameB) {
+  dom.matchupText.textContent = "";
+  dom.matchupText.classList.add("revealed-names");
+
+  const firstLabel = document.createElement("span");
+  firstLabel.className = "preset-label";
+  firstLabel.textContent = nameA;
+
+  const secondLabel = document.createElement("span");
+  secondLabel.className = "preset-label";
+  secondLabel.textContent = nameB;
+
+  dom.matchupText.append("A: ", firstLabel, "  vs  B: ", secondLabel);
+}
+
+function revealPresets() {
+  const pair = state.currentPreferencePair;
+  if (!pair || state.mode !== "preference" || state.isAdvancingPreference) {
+    return;
+  }
+
+  state.isRevealed = true;
+
+  const firstPreset = getPresetById(pair.presetA);
+  const secondPreset = getPresetById(pair.presetB);
+  const firstName = firstPreset?.name ?? pair.presetA;
+  const secondName = secondPreset?.name ?? pair.presetB;
+
+  setRevealedMatchupText(firstName, secondName);
+  dom.verdictRow.classList.add("hidden");
+  dom.revealedActions.classList.remove("hidden");
+  dom.revealArea.classList.add("hidden");
+  updatePreferenceUi();
 }
 
 function formatPhaseLabel(phase) {
@@ -515,21 +570,31 @@ function updatePreferenceUi() {
 
   if (!pair) {
     dom.matchupText.textContent = "Preference test complete";
+    dom.matchupText.classList.remove("revealed-names");
     dom.matchupMeta.textContent = "";
     dom.prefProgress.textContent = progress.total > 0
       ? `Completed ${progress.total} of ${progress.total} matchups.`
       : "";
-    setPreferenceButtonsEnabled(false);
+    setPreferenceButtonsEnabled({
+      switchEnabled: false,
+      verdictEnabled: false,
+    });
     return;
   }
 
   const matchupNumber = progress.done + 1;
 
-  dom.matchupText.textContent = "A vs B";
+  if (!state.isRevealed) {
+    dom.matchupText.textContent = "A vs B";
+    dom.matchupText.classList.remove("revealed-names");
+  }
   dom.matchupMeta.textContent = state.selectedTrack ? `Track: ${state.selectedTrack}` : "";
   dom.prefProgress.textContent = `Matchup ${matchupNumber} of ${progress.total} (${formatPhaseLabel(progress.phase)})`;
 
-  setPreferenceButtonsEnabled(!state.isAdvancingPreference);
+  setPreferenceButtonsEnabled({
+    switchEnabled: !state.isAdvancingPreference,
+    verdictEnabled: !state.isAdvancingPreference && !state.isRevealed,
+  });
 
   const playback = audio.getState();
   setActiveButton(dom.buttonA, playback.activeVariantId === pair.presetA);
@@ -1149,12 +1214,15 @@ function persistPreferenceMatch(choice, pair) {
 
 async function advancePreference(choice, selectedButton) {
   const pair = state.currentPreferencePair;
-  if (!pair || state.isAdvancingPreference) {
+  if (!pair || state.isAdvancingPreference || state.isRevealed) {
     return;
   }
 
   state.isAdvancingPreference = true;
-  setPreferenceButtonsEnabled(false);
+  setPreferenceButtonsEnabled({
+    switchEnabled: false,
+    verdictEnabled: false,
+  });
   persistPreferenceMatch(choice, pair);
 
   if (selectedButton) {
@@ -1237,6 +1305,8 @@ async function startPreferenceMode() {
   if (!setup) {
     return;
   }
+
+  resetRevealUi();
 
   const { selectedPresetIds } = setup;
 
@@ -1606,11 +1676,11 @@ function handleKeyboard(event) {
       switchPreferenceSide("A");
     } else if (key === "2" || key === "b") {
       switchPreferenceSide("B");
-    } else if (key === "z") {
+    } else if (!state.isRevealed && key === "z") {
       advancePreference("A", dom.preferA);
-    } else if (key === "x") {
+    } else if (!state.isRevealed && key === "x") {
       advancePreference("draw", dom.tie);
-    } else if (key === "c") {
+    } else if (!state.isRevealed && key === "c") {
       advancePreference("B", dom.preferB);
     }
     return;
@@ -1834,6 +1904,7 @@ function clearAllScores() {
 
 function resetToSetup() {
   audio.stop();
+  resetRevealUi();
   state.mode = null;
   state.preferenceScheduler = null;
   state.currentPreferencePair = null;
@@ -1963,6 +2034,21 @@ function attachEvents() {
   dom.preferA.addEventListener("click", () => advancePreference("A", dom.preferA));
   dom.tie.addEventListener("click", () => advancePreference("draw", dom.tie));
   dom.preferB.addEventListener("click", () => advancePreference("B", dom.preferB));
+  dom.revealBtn.addEventListener("click", () => {
+    dom.revealBtn.classList.add("hidden");
+    dom.revealConfirm.classList.remove("hidden");
+  });
+  dom.revealCancel.addEventListener("click", () => {
+    dom.revealConfirm.classList.add("hidden");
+    dom.revealBtn.classList.remove("hidden");
+  });
+  dom.revealYes.addEventListener("click", () => revealPresets());
+  dom.revealedResults.addEventListener("click", () => {
+    showPreferenceCompleteInterstitial();
+  });
+  dom.revealedSetup.addEventListener("click", () => {
+    resetToSetup();
+  });
 
   dom.abxStartRun.addEventListener("click", () => startAbxRun());
   dom.abxSwitchA.addEventListener("click", () => listenAbx("A"));
@@ -2019,6 +2105,7 @@ function attachEvents() {
       return;
     }
 
+    resetRevealUi();
     state.mode = "preference";
     state.preferenceScheduler = new MatchupScheduler(state.selectedPresetIds, state.selectedMatchups);
     state.activePreferenceMatches = [];

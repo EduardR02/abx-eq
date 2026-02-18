@@ -698,6 +698,10 @@ input[type="text"]:focus {
   align-items: stretch;
 }
 
+#revealed-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .verdict-row button {
   padding: 1.25rem 1rem;
   border-radius: var(--radius-md);
@@ -724,6 +728,66 @@ input[type="text"]:focus {
   font-size: 0.75rem;
   opacity: 0.6;
   font-weight: 400;
+}
+
+.reveal-area {
+  text-align: center;
+  margin-top: 0.5rem;
+}
+
+.reveal-link {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm);
+  transition: color 0.15s;
+}
+
+.reveal-link:hover {
+  color: var(--text-main);
+}
+
+.reveal-confirm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+}
+
+.reveal-warning {
+  color: var(--danger);
+}
+
+.reveal-action {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+  font-size: 0.78rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.reveal-action:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--text-muted);
+}
+
+.revealed-names {
+  font-size: 0.95rem;
+  color: var(--text-main);
+  margin-top: 0.25rem;
+}
+
+.revealed-names .preset-label {
+  color: var(--accent-secondary);
+  font-weight: 600;
 }
 
 .verdict-flash {
