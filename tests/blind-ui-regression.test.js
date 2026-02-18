@@ -77,7 +77,7 @@ describe("blind UI regression checks", () => {
 
   test("preference progress only uses inline text, not toast popups", () => {
     const toastReferenceCount = appSource.match(/showPreferenceToast\(/g)?.length ?? 0;
-    expect(toastReferenceCount).toBe(1);
+    expect(toastReferenceCount).toBe(0);
     expect(appSource).toContain('dom.prefProgress.textContent = `Matchup ${matchupNumber} of ${progress.total} (${formatPhaseLabel(progress.phase)})`;');
   });
 

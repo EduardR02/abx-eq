@@ -20,7 +20,6 @@ const STORAGE_KEY = "abxEqState.v1";
 const NO_EQ_ID = "__no_eq__";
 const TRANSITION_MS = 150;
 const ROUND_COMPLETE_MS = 600;
-const TOAST_MS = 1500;
 const LOOP_DEFAULT_SECONDS = 10;
 const LOOP_MIN_SECONDS = 1;
 const PLAYBACK_HIDE_MS = 420;
@@ -43,6 +42,7 @@ const MATRIX_SUCCESS_RGB = [156, 207, 216];
 const MATRIX_DANGER_RGB = [235, 111, 146];
 const MATRIX_TEXT_MAX_MIX = 0.82;
 const MATRIX_TEXT_MIN_CONFIDENCE_SCALE = 0.62;
+
 
 const PLAY_ICON_SVG = `
   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -78,7 +78,6 @@ const state = {
   currentPreferencePair: null,
   activePreferenceMatches: [],
   isAdvancingPreference: false,
-  toastTimer: null,
 
   abxPairs: [],
   abxRun: null,
@@ -142,7 +141,6 @@ const dom = {
   tie: document.getElementById("prefer-draw"),
   preferB: document.getElementById("prefer-b"),
   prefProgress: document.getElementById("preference-progress"),
-  preferenceToast: document.getElementById("preference-toast"),
 
   roundCompleteTitle: document.getElementById("round-complete-title"),
   roundCompleteText: document.getElementById("round-complete-text"),
@@ -500,26 +498,6 @@ function setPreferenceButtonsEnabled(enabled) {
   dom.preferB.disabled = !enabled;
 }
 
-function showPreferenceToast(message) {
-  if (!message) {
-    return;
-  }
-
-  if (state.toastTimer) {
-    clearTimeout(state.toastTimer);
-  }
-
-  dom.preferenceToast.textContent = message;
-  dom.preferenceToast.classList.remove("hidden");
-  dom.preferenceToast.classList.add("show");
-
-  state.toastTimer = setTimeout(() => {
-    dom.preferenceToast.classList.remove("show");
-    dom.preferenceToast.classList.add("hidden");
-    state.toastTimer = null;
-  }, TOAST_MS);
-}
-
 function formatPhaseLabel(phase) {
   if (phase === "refinement") {
     return "Refinement phase";
@@ -678,6 +656,21 @@ function getMatrixCellTint(winRate, pValue) {
   return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha.toFixed(3)})`;
 }
 
+function createMatrixEmptyCell({ diagonal = false } = {}) {
+  const td = document.createElement("td");
+  td.classList.add("cell-empty");
+  if (diagonal) {
+    td.classList.add("cell-diagonal");
+  }
+
+  const marker = document.createElement("span");
+  marker.className = "cell-empty";
+  marker.setAttribute("aria-hidden", "true");
+  marker.textContent = "—";
+  td.appendChild(marker);
+  return td;
+}
+
 function renderResults() {
   const currentPresets = listCurrentPresets();
   const ids = new Set(currentPresets.map((preset) => preset.id));
@@ -814,14 +807,13 @@ function renderResults() {
 
     for (let colIndex = 0; colIndex < currentPresets.length; colIndex += 1) {
       const colPreset = currentPresets[colIndex];
-      const td = document.createElement("td");
 
       if (rowPreset.id === colPreset.id) {
-        td.classList.add("cell-empty", "cell-diagonal");
-        td.innerHTML = '<span class="cell-empty" aria-hidden="true">—</span>';
-        tr.appendChild(td);
+        tr.appendChild(createMatrixEmptyCell({ diagonal: true }));
         continue;
       }
+
+      const td = document.createElement("td");
 
       const cell = matrix.get(rowPreset.id).get(colPreset.id);
       const decisiveOutcomes = cell.wins + cell.losses;
@@ -840,9 +832,7 @@ function renderResults() {
       }
 
       if (!hasOutcomes) {
-        td.classList.add("cell-empty");
-        td.innerHTML = '<span class="cell-empty" aria-hidden="true">—</span>';
-        tr.appendChild(td);
+        tr.appendChild(createMatrixEmptyCell());
         continue;
       }
 
@@ -1031,6 +1021,12 @@ function renderPresetChecklist() {
   updateRoundSelectorUi();
 }
 
+function syncTrackSelects() {
+  dom.setupTrackSelect.value = state.selectedTrack;
+  dom.prefTrackSelect.value = state.selectedTrack;
+  dom.abxTrackSelect.value = state.selectedTrack;
+}
+
 function renderTrackSelects() {
   const selectNodes = [dom.setupTrackSelect, dom.prefTrackSelect, dom.abxTrackSelect];
 
@@ -1048,9 +1044,7 @@ function renderTrackSelects() {
     state.selectedTrack = state.tracks[0];
   }
 
-  dom.setupTrackSelect.value = state.selectedTrack;
-  dom.prefTrackSelect.value = state.selectedTrack;
-  dom.abxTrackSelect.value = state.selectedTrack;
+  syncTrackSelects();
 }
 
 function renderAbxPairSelect() {
@@ -1215,20 +1209,40 @@ async function advancePreference(choice, selectedButton) {
   }
 }
 
-async function startPreferenceMode() {
+function getModeStartSetup() {
   setSetupError("");
-  state.selectedPresetIds = getSelectedPresetIdsFromSetup();
-  state.selectedTrack = dom.setupTrackSelect.value;
-  state.normalizationMode = normalizeNormalizationMode(dom.normalizationMode.value || "earsens");
 
-  if (state.selectedPresetIds.length < 2) {
+  const selectedPresetIds = getSelectedPresetIdsFromSetup();
+  const selectedTrack = dom.setupTrackSelect.value;
+  const normalizationMode = normalizeNormalizationMode(dom.normalizationMode.value || "earsens");
+
+  state.selectedPresetIds = selectedPresetIds;
+  state.selectedTrack = selectedTrack;
+  state.normalizationMode = normalizationMode;
+
+  if (selectedPresetIds.length < 2) {
     setSetupError("Select at least two presets.");
+    return null;
+  }
+
+  return {
+    selectedPresetIds,
+    selectedTrack,
+    normalizationMode,
+  };
+}
+
+async function startPreferenceMode() {
+  const setup = getModeStartSetup();
+  if (!setup) {
     return;
   }
 
+  const { selectedPresetIds } = setup;
+
   const requestedMatchups = Number.parseInt(dom.roundsCustomInput.value, 10);
-  const pairCount = pairCountForPresetCount(state.selectedPresetIds.length);
-  recomputeRoundPlanSuggestions(state.selectedPresetIds.length);
+  const pairCount = pairCountForPresetCount(selectedPresetIds.length);
+  recomputeRoundPlanSuggestions(selectedPresetIds.length);
   state.selectedMatchups = Number.isFinite(requestedMatchups) && requestedMatchups > 0
     ? requestedMatchups
     : getRoundPlanMatchups("standard");
@@ -1236,16 +1250,15 @@ async function startPreferenceMode() {
   dom.roundsCustomInput.value = String(state.selectedMatchups);
   state.selectedRoundPlan = inferRoundPlanFromValue(state.selectedMatchups);
 
-  state.selectionKey = getSelectionKey(state.selectedPresetIds);
+  state.selectionKey = getSelectionKey(selectedPresetIds);
   state.mode = "preference";
-  state.preferenceScheduler = new MatchupScheduler(state.selectedPresetIds, state.selectedMatchups);
+  state.preferenceScheduler = new MatchupScheduler(selectedPresetIds, state.selectedMatchups);
   state.activePreferenceMatches = [];
   state.currentPreferencePair = state.preferenceScheduler.next(state.activePreferenceMatches);
-  state.abxPairs = buildAbxPairs(state.selectedPresetIds);
+  state.abxPairs = buildAbxPairs(selectedPresetIds);
   state.isAdvancingPreference = false;
 
-  dom.prefTrackSelect.value = state.selectedTrack;
-  dom.abxTrackSelect.value = state.selectedTrack;
+  syncTrackSelects();
 
   await prepareTrackForSelection();
   showScreen("preference");
@@ -1253,25 +1266,21 @@ async function startPreferenceMode() {
 }
 
 async function startAbxMode() {
-  setSetupError("");
-  state.selectedPresetIds = getSelectedPresetIdsFromSetup();
-  state.selectedTrack = dom.setupTrackSelect.value;
-  state.normalizationMode = normalizeNormalizationMode(dom.normalizationMode.value || "earsens");
-
-  if (state.selectedPresetIds.length < 2) {
-    setSetupError("Select at least two presets.");
+  const setup = getModeStartSetup();
+  if (!setup) {
     return;
   }
 
-  state.selectionKey = getSelectionKey(state.selectedPresetIds);
+  const { selectedPresetIds } = setup;
+
+  state.selectionKey = getSelectionKey(selectedPresetIds);
   state.mode = "abx";
-  state.abxPairs = buildAbxPairs(state.selectedPresetIds);
+  state.abxPairs = buildAbxPairs(selectedPresetIds);
   state.abxRun = null;
   state.abxListeningTarget = "A";
 
   renderAbxPairSelect();
-  dom.prefTrackSelect.value = state.selectedTrack;
-  dom.abxTrackSelect.value = state.selectedTrack;
+  syncTrackSelects();
 
   await prepareTrackForSelection();
   showScreen("abx");
@@ -1380,9 +1389,7 @@ async function handleTrackChange(track) {
   const shouldResume = audio.getState().isPlaying;
 
   state.selectedTrack = track;
-  dom.setupTrackSelect.value = track;
-  dom.prefTrackSelect.value = track;
-  dom.abxTrackSelect.value = track;
+  syncTrackSelects();
 
   try {
     await prepareTrackForSelection();
@@ -1685,9 +1692,13 @@ function setBrowseButtonsDisabled(disabled) {
   dom.presetsDirBrowseBtn.disabled = disabled;
 }
 
+function setDirectoryActionsDisabled(disabled) {
+  dom.applyDirectoriesBtn.disabled = disabled;
+  setBrowseButtonsDisabled(disabled);
+}
+
 async function browseDirectoryIntoInput(input) {
-  dom.applyDirectoriesBtn.disabled = true;
-  setBrowseButtonsDisabled(true);
+  setDirectoryActionsDisabled(true);
   setDirectoryFeedback("Opening folder picker...");
 
   try {
@@ -1714,8 +1725,7 @@ async function browseDirectoryIntoInput(input) {
   } catch (error) {
     setDirectoryFeedback(error instanceof Error ? error.message : String(error), "error");
   } finally {
-    setBrowseButtonsDisabled(false);
-    dom.applyDirectoriesBtn.disabled = false;
+    setDirectoryActionsDisabled(false);
   }
 }
 
@@ -1725,8 +1735,7 @@ async function applyDirectoryConfig() {
     presetsDir: dom.presetsDirInput.value.trim(),
   };
 
-  dom.applyDirectoriesBtn.disabled = true;
-  setBrowseButtonsDisabled(true);
+  setDirectoryActionsDisabled(true);
   setDirectoryFeedback("Applying directory config...");
 
   try {
@@ -1758,8 +1767,7 @@ async function applyDirectoryConfig() {
   } catch (error) {
     setDirectoryFeedback(error instanceof Error ? error.message : String(error), "error");
   } finally {
-    dom.applyDirectoriesBtn.disabled = false;
-    setBrowseButtonsDisabled(false);
+    setDirectoryActionsDisabled(false);
   }
 }
 
@@ -1824,18 +1832,65 @@ function clearAllScores() {
   }, RESET_DONE_MS);
 }
 
+function resetToSetup() {
+  audio.stop();
+  state.mode = null;
+  state.preferenceScheduler = null;
+  state.currentPreferencePair = null;
+  state.activePreferenceMatches = [];
+  showScreen("setup");
+}
+
+async function withAudioContext(startFn) {
+  try {
+    await audio.ensureContext();
+    await startFn();
+  } catch (error) {
+    setSetupError(error instanceof Error ? error.message : String(error));
+    showScreen("setup");
+  }
+}
+
+function getTrackFromSelectEvent(event) {
+  if (!(event.target instanceof HTMLSelectElement)) {
+    return null;
+  }
+  return event.target.value;
+}
+
+function handleModeTrackSelectChange(event) {
+  const nextTrack = getTrackFromSelectEvent(event);
+  if (nextTrack === null) {
+    return;
+  }
+  handleTrackChange(nextTrack);
+}
+
+function handleSetupTrackSelectChange(event) {
+  const nextTrack = getTrackFromSelectEvent(event);
+  if (nextTrack === null) {
+    return;
+  }
+
+  state.selectedTrack = nextTrack;
+  syncTrackSelects();
+}
+
 function attachEvents() {
   dom.applyDirectoriesBtn.addEventListener("click", () => {
     applyDirectoryConfig();
   });
 
-  dom.musicDirBrowseBtn.addEventListener("click", () => {
-    browseDirectoryIntoInput(dom.musicDirInput);
-  });
+  const browseButtonBindings = [
+    [dom.musicDirBrowseBtn, dom.musicDirInput],
+    [dom.presetsDirBrowseBtn, dom.presetsDirInput],
+  ];
 
-  dom.presetsDirBrowseBtn.addEventListener("click", () => {
-    browseDirectoryIntoInput(dom.presetsDirInput);
-  });
+  for (const [button, input] of browseButtonBindings) {
+    button.addEventListener("click", () => {
+      browseDirectoryIntoInput(input);
+    });
+  }
 
   dom.musicDirInput.addEventListener("input", () => setDirectoryFeedback(""));
   dom.presetsDirInput.addEventListener("input", () => setDirectoryFeedback(""));
@@ -1844,24 +1899,12 @@ function attachEvents() {
     localStorage.setItem(DIRECTORY_DETAILS_STORAGE_KEY, dom.directoriesPanel.open ? "open" : "closed");
   });
 
-  dom.startPreferenceBtn.addEventListener("click", async () => {
-    try {
-      await audio.ensureContext();
-      await startPreferenceMode();
-    } catch (error) {
-      setSetupError(error instanceof Error ? error.message : String(error));
-      showScreen("setup");
-    }
+  dom.startPreferenceBtn.addEventListener("click", () => {
+    withAudioContext(startPreferenceMode);
   });
 
-  dom.startAbxBtn.addEventListener("click", async () => {
-    try {
-      await audio.ensureContext();
-      await startAbxMode();
-    } catch (error) {
-      setSetupError(error instanceof Error ? error.message : String(error));
-      showScreen("setup");
-    }
+  dom.startAbxBtn.addEventListener("click", () => {
+    withAudioContext(startAbxMode);
   });
 
   dom.resetScores.addEventListener("click", () => {
@@ -1877,17 +1920,17 @@ function attachEvents() {
     enterResetConfirmState();
   });
 
-  dom.roundsQuickBtn.addEventListener("click", () => {
-    setSelectedMatchups(getRoundPlanMatchups("quick"), "quick");
-  });
+  const roundPlanButtons = [
+    [dom.roundsQuickBtn, "quick"],
+    [dom.roundsStandardBtn, "standard"],
+    [dom.roundsRigorousBtn, "rigorous"],
+  ];
 
-  dom.roundsStandardBtn.addEventListener("click", () => {
-    setSelectedMatchups(getRoundPlanMatchups("standard"), "standard");
-  });
-
-  dom.roundsRigorousBtn.addEventListener("click", () => {
-    setSelectedMatchups(getRoundPlanMatchups("rigorous"), "rigorous");
-  });
+  for (const [button, plan] of roundPlanButtons) {
+    button.addEventListener("click", () => {
+      setSelectedMatchups(getRoundPlanMatchups(plan), plan);
+    });
+  }
 
   dom.roundsCustomInput.addEventListener("input", () => {
     const parsed = Number.parseInt(dom.roundsCustomInput.value, 10);
@@ -1898,34 +1941,14 @@ function attachEvents() {
   });
 
   dom.backToSetup.addEventListener("click", () => {
-    audio.stop();
-    state.mode = null;
-    state.preferenceScheduler = null;
-    state.currentPreferencePair = null;
-    state.activePreferenceMatches = [];
-    showScreen("setup");
+    resetToSetup();
   });
 
-  dom.prefTrackSelect.addEventListener("change", (event) => {
-    if (event.target instanceof HTMLSelectElement) {
-      handleTrackChange(event.target.value);
-    }
-  });
+  for (const select of [dom.prefTrackSelect, dom.abxTrackSelect]) {
+    select.addEventListener("change", handleModeTrackSelectChange);
+  }
 
-  dom.abxTrackSelect.addEventListener("change", (event) => {
-    if (event.target instanceof HTMLSelectElement) {
-      handleTrackChange(event.target.value);
-    }
-  });
-
-  dom.setupTrackSelect.addEventListener("change", (event) => {
-    if (!(event.target instanceof HTMLSelectElement)) {
-      return;
-    }
-    state.selectedTrack = event.target.value;
-    dom.prefTrackSelect.value = state.selectedTrack;
-    dom.abxTrackSelect.value = state.selectedTrack;
-  });
+  dom.setupTrackSelect.addEventListener("change", handleSetupTrackSelectChange);
 
   dom.normalizationMode.addEventListener("change", (event) => {
     if (!(event.target instanceof HTMLSelectElement)) {
@@ -2006,12 +2029,7 @@ function attachEvents() {
   });
 
   dom.resultsSetupBtn.addEventListener("click", () => {
-    audio.stop();
-    state.mode = null;
-    state.preferenceScheduler = null;
-    state.currentPreferencePair = null;
-    state.activePreferenceMatches = [];
-    showScreen("setup");
+    resetToSetup();
   });
 
   audio.addEventListener("state", () => {
