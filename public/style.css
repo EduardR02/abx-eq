@@ -614,6 +614,7 @@ input[type="text"]:focus {
   align-items: center;
   max-width: 700px;
   margin: 0 auto;
+  min-height: clamp(24rem, calc(100dvh - 16rem), 44rem);
 }
 
 .screen-head {
@@ -637,6 +638,7 @@ input[type="text"]:focus {
   gap: 2.5rem;
   text-align: center;
   transition: opacity 0.3s ease, transform 0.3s ease;
+  margin-top: auto;
   margin-bottom: 2rem;
 }
 
@@ -698,6 +700,10 @@ input[type="text"]:focus {
   align-items: stretch;
 }
 
+#preference-screen .verdict-row {
+  min-height: 5rem;
+}
+
 #revealed-actions {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -733,6 +739,10 @@ input[type="text"]:focus {
 .reveal-area {
   text-align: center;
   margin-top: 0.5rem;
+  min-height: 3.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .reveal-link {
@@ -809,6 +819,10 @@ input[type="text"]:focus {
   padding-top: 1.5rem;
   border-top: 1px solid var(--border-subtle);
   width: 100%;
+}
+
+#preference-screen .shortcuts-legend {
+  margin-bottom: auto;
 }
 
 .legend-label {
