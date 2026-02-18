@@ -20,10 +20,33 @@
         <section id="setup-screen" class="panel">
           <h2>Setup</h2>
           <p class="section-copy">Choose presets, a track, and how rigorous you want the preference run to be.</p>
+          <div class="setup-header-line" aria-hidden="true"></div>
           <div id="setup-error" class="error hidden"></div>
 
           <div class="setup-grid">
             <div class="setup-column">
+              <details id="directories-panel" class="directories-panel" open>
+                <summary>Directories</summary>
+                <p class="meta directories-copy">Use paths relative to this project root.</p>
+
+                <label for="music-dir-input" class="field-label">Music directory</label>
+                <div class="directory-input-row">
+                  <input id="music-dir-input" type="text" value="music" spellcheck="false" autocomplete="off" />
+                  <button id="music-dir-browse" class="secondary browse-btn" type="button">Browse</button>
+                </div>
+
+                <label for="presets-dir-input" class="field-label">Presets directory</label>
+                <div class="directory-input-row">
+                  <input id="presets-dir-input" type="text" value="presets_for_shootout" spellcheck="false" autocomplete="off" />
+                  <button id="presets-dir-browse" class="secondary browse-btn" type="button">Browse</button>
+                </div>
+
+                <div class="directories-actions">
+                  <button id="apply-directories" class="secondary" type="button">Apply</button>
+                  <p id="directories-feedback" class="config-feedback hidden" role="status" aria-live="polite"></p>
+                </div>
+              </details>
+
               <h3>EQ Presets</h3>
               <div id="preset-list" class="preset-list"></div>
             </div>
@@ -31,6 +54,14 @@
             <div class="setup-column">
               <h3>Track</h3>
               <select id="track-select-setup"></select>
+
+              <label for="normalization-mode" class="field-label">Loudness Normalization</label>
+              <select id="normalization-mode">
+                <option value="earsens">Ear sensitivity 1–4 kHz (recommended)</option>
+                <option value="treble">Treble-matched 2–10 kHz</option>
+                <option value="rms">Flat RMS</option>
+                <option value="lufs">K-weighted LUFS (broadcast standard)</option>
+              </select>
 
               <div class="rounds-panel">
                 <h3>Preference Matchups</h3>
@@ -166,17 +197,45 @@
 
         <section id="playback-controls" class="panel hidden">
           <h2 class="visually-hidden">Playback</h2>
+          <div id="loop-info-row" class="loop-info-row" aria-hidden="true" aria-live="polite">
+            <span id="loop-times">Loop: 0:00 - 0:00</span>
+          </div>
           <div class="controls-row">
             <div class="transport-group">
-                <button id="restart" class="icon-btn" aria-label="Restart">⏮</button>
-                <button id="rewind" class="icon-btn" aria-label="Rewind 5s">⏪</button>
-                <button id="play-pause" class="icon-btn play-main" aria-label="Play/Pause">▶</button>
-                <button id="forward" class="icon-btn" aria-label="Forward 5s">⏩</button>
+                <button id="restart" class="icon-btn" aria-label="Restart">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M7 5v14"></path>
+                    <path class="icon-fill" d="M19 6L9.5 12 19 18V6Z"></path>
+                  </svg>
+                </button>
+                <button id="rewind" class="icon-btn" aria-label="Rewind 5s">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path class="icon-fill" d="M20 6L12 12 20 18V6Z"></path>
+                    <path class="icon-fill" d="M12 6L4 12 12 18V6Z"></path>
+                  </svg>
+                </button>
+                <button id="play-pause" class="icon-btn play-main" aria-label="Play/Pause">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path class="icon-fill" d="M8 6L18 12L8 18V6Z"></path>
+                  </svg>
+                </button>
+                <button id="forward" class="icon-btn" aria-label="Forward 5s">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path class="icon-fill" d="M4 6L12 12 4 18V6Z"></path>
+                    <path class="icon-fill" d="M12 6L20 12 12 18V6Z"></path>
+                  </svg>
+                </button>
             </div>
 
             <div class="loop-controls">
-              <button id="loop-toggle" class="icon-btn" aria-label="Toggle loop">🔁</button>
-              <span id="loop-times" class="loop-times hidden">Loop: 0:00 - 0:00</span>
+              <button id="loop-toggle" class="icon-btn" aria-label="Toggle loop">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M5 8h11"></path>
+                  <path d="M13 5l3 3-3 3"></path>
+                  <path d="M19 16H8"></path>
+                  <path d="M11 13l-3 3 3 3"></path>
+                </svg>
+              </button>
             </div>
             
             <div class="seek-container">
@@ -188,7 +247,13 @@
             <span id="time-label">0:00 / 0:00</span>
             
             <div class="volume-container">
-              <span class="vol-icon">🔊</span>
+              <span class="vol-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false">
+                  <path class="icon-fill" d="M4 10H8L13 6V18L8 14H4V10Z"></path>
+                  <path d="M16 9C17.8 10.3 17.8 13.7 16 15"></path>
+                  <path d="M18.5 6.5C21.8 9.1 21.8 14.9 18.5 17.5"></path>
+                </svg>
+              </span>
               <input id="volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume" />
             </div>
           </div>

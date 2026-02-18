@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { access, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 type EqFilter = {
@@ -16,10 +16,36 @@ type ParsedPreset = {
   filters: EqFilter[];
 };
 
+type DirectoryConfig = {
+  musicDir: string;
+  presetsDir: string;
+};
+
+type BrowseResponse =
+  | { path: string }
+  | { cancelled: true };
+
+type BrowseCommandResult = {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+};
+
+type BrowseCommandSpec = {
+  args: string[];
+  isCancelled: (result: BrowseCommandResult) => boolean;
+};
+
+type BrowseCommandRunner = (args: string[]) => Promise<BrowseCommandResult>;
+
 const ROOT = process.cwd();
 const PUBLIC_DIR = path.join(ROOT, "public");
-const MUSIC_DIR = path.join(ROOT, "music");
-const PRESETS_DIR = path.join(ROOT, "presets_for_shootout");
+export const DEFAULT_DIRECTORY_CONFIG: DirectoryConfig = {
+  musicDir: "music",
+  presetsDir: "presets_for_shootout",
+};
+
+let directoryConfig: DirectoryConfig = { ...DEFAULT_DIRECTORY_CONFIG };
 
 const MIME_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -104,8 +130,222 @@ function parsePresetContent(text: string, filename: string): ParsedPreset {
   };
 }
 
+function normalizeDirectoryInput(rawValue: unknown, fieldName: string): string {
+  if (typeof rawValue !== "string") {
+    throw new Error(`'${fieldName}' must be a string.`);
+  }
+
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    throw new Error(`'${fieldName}' cannot be empty.`);
+  }
+
+  if (path.isAbsolute(trimmed)) {
+    throw new Error(`'${fieldName}' must be a relative path from the project root.`);
+  }
+
+  const normalized = path.normalize(trimmed).replace(/^([/\\])+/, "");
+  if (!normalized || normalized === ".") {
+    throw new Error(`'${fieldName}' must point to a directory below the project root.`);
+  }
+
+  const resolved = path.resolve(ROOT, normalized);
+  const relative = path.relative(ROOT, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`'${fieldName}' must stay inside the project root.`);
+  }
+
+  return relative.replace(/\\/g, "/");
+}
+
+function normalizeDirectoryConfig(rawConfig: unknown): DirectoryConfig {
+  if (!rawConfig || typeof rawConfig !== "object") {
+    throw new Error("Request body must be a JSON object.");
+  }
+
+  const payload = rawConfig as Record<string, unknown>;
+  return {
+    musicDir: normalizeDirectoryInput(payload.musicDir, "musicDir"),
+    presetsDir: normalizeDirectoryInput(payload.presetsDir, "presetsDir"),
+  };
+}
+
+function resolveFromRoot(relativePath: string): string {
+  return path.resolve(ROOT, relativePath);
+}
+
+function getResolvedDirectoryPaths(config = directoryConfig): { musicDirPath: string; presetsDirPath: string } {
+  return {
+    musicDirPath: resolveFromRoot(config.musicDir),
+    presetsDirPath: resolveFromRoot(config.presetsDir),
+  };
+}
+
+async function ensureDirectoryExists(relativePath: string, fieldName: string): Promise<void> {
+  const absolutePath = resolveFromRoot(relativePath);
+  try {
+    await access(absolutePath);
+    const directoryStat = await stat(absolutePath);
+    if (!directoryStat.isDirectory()) {
+      throw new Error(`'${fieldName}' is not a directory: ${relativePath}`);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("'")) {
+      throw error;
+    }
+    throw new Error(`Directory does not exist: ${relativePath}`);
+  }
+}
+
+export function getDirectoryConfig(): DirectoryConfig {
+  return { ...directoryConfig };
+}
+
+export async function updateDirectoryConfig(rawConfig: unknown): Promise<DirectoryConfig> {
+  const nextConfig = normalizeDirectoryConfig(rawConfig);
+  await Promise.all([
+    ensureDirectoryExists(nextConfig.musicDir, "musicDir"),
+    ensureDirectoryExists(nextConfig.presetsDir, "presetsDir"),
+  ]);
+  directoryConfig = nextConfig;
+  return getDirectoryConfig();
+}
+
+export function toProjectRelativePath(rawPath: string): string {
+  const firstLine = rawPath.trim().split(/\r?\n/, 1)[0]?.trim() ?? "";
+  if (!firstLine) {
+    throw new Error("Folder picker returned an empty path.");
+  }
+
+  const absolutePath = path.isAbsolute(firstLine)
+    ? firstLine
+    : path.resolve(ROOT, firstLine);
+  const relativePath = path.relative(ROOT, absolutePath).replace(/\\/g, "/");
+  return relativePath || ".";
+}
+
+export function buildBrowseDialogCommands(platform: NodeJS.Platform): BrowseCommandSpec[] {
+  if (platform === "win32") {
+    const script = [
+      "Add-Type -AssemblyName System.Windows.Forms",
+      "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog",
+      "$dialog.Description = 'Select folder'",
+      "$dialog.ShowNewFolderButton = $false",
+      "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {",
+      "  [Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+      "  Write-Output $dialog.SelectedPath",
+      "  exit 0",
+      "}",
+      "exit 2",
+    ].join("; ");
+
+    return [
+      {
+        args: ["pwsh", "-NoProfile", "-STA", "-Command", script],
+        isCancelled: (result) => result.exitCode === 2,
+      },
+      {
+        args: ["powershell", "-NoProfile", "-STA", "-Command", script],
+        isCancelled: (result) => result.exitCode === 2,
+      },
+    ];
+  }
+
+  if (platform === "darwin") {
+    return [{
+      args: [
+        "osascript",
+        "-e",
+        "try",
+        "-e",
+        'POSIX path of (choose folder with prompt "Select folder")',
+        "-e",
+        "on error number -128",
+        "-e",
+        "return \"\"",
+        "-e",
+        "end try",
+      ],
+      isCancelled: () => false,
+    }];
+  }
+
+  if (platform === "linux") {
+    return [
+      {
+        args: ["zenity", "--file-selection", "--directory", "--title=Select folder"],
+        isCancelled: (result) => result.exitCode === 1,
+      },
+      {
+        args: ["kdialog", "--getexistingdirectory", ".", "Select folder"],
+        isCancelled: (result) => result.exitCode === 1,
+      },
+    ];
+  }
+
+  throw new Error(`Folder browsing is not supported on platform '${platform}'.`);
+}
+
+async function runBrowseCommand(args: string[]): Promise<BrowseCommandResult> {
+  const process = Bun.spawn(args, {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [exitCode, stdout, stderr] = await Promise.all([
+    process.exited,
+    new Response(process.stdout).text(),
+    new Response(process.stderr).text(),
+  ]);
+
+  return {
+    exitCode,
+    stdout,
+    stderr,
+  };
+}
+
+export async function browseForDirectory(options: {
+  platform?: NodeJS.Platform;
+  runCommand?: BrowseCommandRunner;
+} = {}): Promise<BrowseResponse> {
+  const platform = options.platform ?? process.platform;
+  const runCommand = options.runCommand ?? runBrowseCommand;
+  const commands = buildBrowseDialogCommands(platform);
+
+  let lastFailureMessage = "";
+
+  for (const command of commands) {
+    let result: BrowseCommandResult;
+    try {
+      result = await runCommand(command.args);
+    } catch (error) {
+      lastFailureMessage = error instanceof Error ? error.message : String(error);
+      continue;
+    }
+
+    if (result.exitCode === 0) {
+      const selectedPath = result.stdout.trim();
+      if (!selectedPath) {
+        return { cancelled: true };
+      }
+      return { path: toProjectRelativePath(selectedPath) };
+    }
+
+    if (command.isCancelled(result)) {
+      return { cancelled: true };
+    }
+
+    const stderr = result.stderr.trim();
+    lastFailureMessage = stderr || `Command exited with code ${result.exitCode}: ${command.args[0]}`;
+  }
+
+  throw new Error(lastFailureMessage || "No supported folder picker command is available.");
+}
+
 async function listPresets(): Promise<ParsedPreset[]> {
-  const entries = await readdir(PRESETS_DIR, { withFileTypes: true });
+  const { presetsDirPath } = getResolvedDirectoryPaths();
+  const entries = await readdir(presetsDirPath, { withFileTypes: true });
   const files = entries
     .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".txt"))
     .map((entry) => entry.name)
@@ -114,7 +354,7 @@ async function listPresets(): Promise<ParsedPreset[]> {
   const presets: ParsedPreset[] = [];
 
   for (const filename of files) {
-    const file = Bun.file(path.join(PRESETS_DIR, filename));
+    const file = Bun.file(path.join(presetsDirPath, filename));
     const text = await file.text();
     presets.push(parsePresetContent(text, filename));
   }
@@ -123,7 +363,8 @@ async function listPresets(): Promise<ParsedPreset[]> {
 }
 
 async function listTracks(): Promise<string[]> {
-  const entries = await readdir(MUSIC_DIR, { withFileTypes: true });
+  const { musicDirPath } = getResolvedDirectoryPaths();
+  const entries = await readdir(musicDirPath, { withFileTypes: true });
   return entries
     .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".wav"))
     .map((entry) => entry.name)
@@ -204,8 +445,10 @@ async function serveMusicFile(filename: string, request: Request): Promise<Respo
     return notFound();
   }
 
-  const fullPath = path.resolve(MUSIC_DIR, safeName);
-  if (!fullPath.startsWith(MUSIC_DIR)) {
+  const { musicDirPath } = getResolvedDirectoryPaths();
+  const fullPath = path.resolve(musicDirPath, safeName);
+  const relative = path.relative(musicDirPath, fullPath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
     return notFound();
   }
 
@@ -275,12 +518,56 @@ async function serveStatic(urlPath: string): Promise<Response> {
 
 const preferredPort = Number(process.env.PORT ?? "3000");
 
-function startServer(port: number) {
+export function startServer(
+  port: number,
+  options: {
+    browseDirectory?: () => Promise<BrowseResponse>;
+  } = {},
+) {
+  const browseDirectory = options.browseDirectory ?? (() => browseForDirectory());
+
   return Bun.serve({
     port,
     async fetch(request) {
       const url = new URL(request.url);
       const { pathname } = url;
+
+      if (pathname === "/api/config") {
+        if (request.method === "GET") {
+          return Response.json(getDirectoryConfig());
+        }
+
+        if (request.method === "POST") {
+          let body: unknown;
+          try {
+            body = await request.json();
+          } catch {
+            return jsonError("Invalid JSON body.", 400);
+          }
+
+          try {
+            const config = await updateDirectoryConfig(body);
+            return Response.json(config);
+          } catch (error) {
+            return jsonError((error as Error).message, 400);
+          }
+        }
+
+        return jsonError("Method not allowed.", 405);
+      }
+
+      if (pathname === "/api/browse") {
+        if (request.method !== "POST") {
+          return jsonError("Method not allowed.", 405);
+        }
+
+        try {
+          const result = await browseDirectory();
+          return Response.json(result);
+        } catch (error) {
+          return jsonError(`Failed to open folder picker: ${(error as Error).message}`);
+        }
+      }
 
       if (pathname === "/api/presets") {
         try {

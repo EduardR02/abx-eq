@@ -58,6 +58,13 @@ function designBiquad({ type, frequency, q = 0.70710678, gainDb = 0, sampleRate 
     a0 = 1 + alpha;
     a1 = -2 * cosW0;
     a2 = 1 - alpha;
+  } else if (type === "lowpass") {
+    b0 = (1 - cosW0) / 2;
+    b1 = 1 - cosW0;
+    b2 = (1 - cosW0) / 2;
+    a0 = 1 + alpha;
+    a1 = -2 * cosW0;
+    a2 = 1 - alpha;
   } else {
     throw new Error(`Unsupported filter type: ${type}`);
   }
@@ -220,6 +227,381 @@ function measureKWeightedLufs(audioBuffer) {
   const relativeGateEnergy = absoluteGatedMeanEnergy / 10;
 
   // ITU-R BS.1770-4 relative gate: discard blocks below -10 LU from gated mean.
+  let integratedEnergySum = 0;
+  let integratedCount = 0;
+  for (const blockEnergy of absoluteGatedEnergies) {
+    if (blockEnergy >= relativeGateEnergy) {
+      integratedEnergySum += blockEnergy;
+      integratedCount += 1;
+    }
+  }
+
+  if (!integratedCount) {
+    return -Infinity;
+  }
+
+  const integratedEnergy = integratedEnergySum / integratedCount;
+  if (!(integratedEnergy > 0)) {
+    return -Infinity;
+  }
+
+  return -0.691 + 10 * Math.log10(integratedEnergy);
+}
+
+function measureFlatRms(audioBuffer) {
+  const sampleRate = audioBuffer.sampleRate;
+  const frames = audioBuffer.length;
+  const channelCount = audioBuffer.numberOfChannels;
+  if (!frames || !channelCount) {
+    return -Infinity;
+  }
+
+  const blockSize = Math.max(1, Math.floor(0.4 * sampleRate));
+  const hopSize = Math.max(1, Math.floor(0.1 * sampleRate));
+  const absoluteGateEnergy = 10 ** ((-70 + 0.691) / 10);
+
+  const channelData = new Array(channelCount);
+  const channelWeights = new Array(channelCount);
+
+  for (let channel = 0; channel < channelCount; channel += 1) {
+    channelData[channel] = audioBuffer.getChannelData(channel);
+    channelWeights[channel] = getBs1770ChannelWeight(channel, channelCount);
+  }
+
+  const windowEnergies = new Float64Array(blockSize);
+  let queueIndex = 0;
+  let queueFill = 0;
+  let runningWindowEnergy = 0;
+  let totalWeightedEnergy = 0;
+  const blockEnergies = [];
+  let nextBlockStart = 0;
+
+  for (let i = 0; i < frames; i += 1) {
+    let frameWeightedEnergy = 0;
+
+    for (let channel = 0; channel < channelCount; channel += 1) {
+      const weight = channelWeights[channel];
+      if (weight === 0) {
+        continue;
+      }
+
+      const x = channelData[channel][i];
+      frameWeightedEnergy += weight * x * x;
+    }
+
+    totalWeightedEnergy += frameWeightedEnergy;
+
+    if (queueFill < blockSize) {
+      windowEnergies[queueIndex] = frameWeightedEnergy;
+      runningWindowEnergy += frameWeightedEnergy;
+      queueFill += 1;
+      queueIndex = (queueIndex + 1) % blockSize;
+    } else {
+      const evictedEnergy = windowEnergies[queueIndex];
+      windowEnergies[queueIndex] = frameWeightedEnergy;
+      runningWindowEnergy += frameWeightedEnergy - evictedEnergy;
+      queueIndex = (queueIndex + 1) % blockSize;
+    }
+
+    if (queueFill === blockSize) {
+      const blockStart = i - blockSize + 1;
+      if (blockStart === nextBlockStart) {
+        blockEnergies.push(runningWindowEnergy / blockSize);
+        nextBlockStart += hopSize;
+      }
+    }
+  }
+
+  if (blockEnergies.length === 0) {
+    blockEnergies.push(totalWeightedEnergy / frames);
+  }
+
+  const absoluteGatedEnergies = [];
+  let absoluteGatedEnergySum = 0;
+  for (const blockEnergy of blockEnergies) {
+    if (blockEnergy >= absoluteGateEnergy) {
+      absoluteGatedEnergies.push(blockEnergy);
+      absoluteGatedEnergySum += blockEnergy;
+    }
+  }
+
+  if (absoluteGatedEnergies.length === 0) {
+    return -Infinity;
+  }
+
+  const absoluteGatedMeanEnergy = absoluteGatedEnergySum / absoluteGatedEnergies.length;
+  const relativeGateEnergy = absoluteGatedMeanEnergy / 10;
+
+  let integratedEnergySum = 0;
+  let integratedCount = 0;
+  for (const blockEnergy of absoluteGatedEnergies) {
+    if (blockEnergy >= relativeGateEnergy) {
+      integratedEnergySum += blockEnergy;
+      integratedCount += 1;
+    }
+  }
+
+  if (!integratedCount) {
+    return -Infinity;
+  }
+
+  const integratedEnergy = integratedEnergySum / integratedCount;
+  if (!(integratedEnergy > 0)) {
+    return -Infinity;
+  }
+
+  return -0.691 + 10 * Math.log10(integratedEnergy);
+}
+
+function measureBandpassRms(audioBuffer) {
+  const sampleRate = audioBuffer.sampleRate;
+  const frames = audioBuffer.length;
+  const channelCount = audioBuffer.numberOfChannels;
+  if (!frames || !channelCount) {
+    return -Infinity;
+  }
+
+  const highpass = designBiquad({
+    type: "highpass",
+    frequency: 2000,
+    q: 0.7071,
+    sampleRate,
+  });
+  const lowpass = designBiquad({
+    type: "lowpass",
+    frequency: 10000,
+    q: 0.7071,
+    sampleRate,
+  });
+
+  const blockSize = Math.max(1, Math.floor(0.4 * sampleRate));
+  const hopSize = Math.max(1, Math.floor(0.1 * sampleRate));
+  const absoluteGateEnergy = 10 ** ((-70 + 0.691) / 10);
+
+  const channelData = new Array(channelCount);
+  const channelWeights = new Array(channelCount);
+  const states = new Array(channelCount);
+
+  for (let channel = 0; channel < channelCount; channel += 1) {
+    channelData[channel] = audioBuffer.getChannelData(channel);
+    channelWeights[channel] = getBs1770ChannelWeight(channel, channelCount);
+    states[channel] = {
+      hpZ1: 0,
+      hpZ2: 0,
+      lpZ1: 0,
+      lpZ2: 0,
+    };
+  }
+
+  const windowEnergies = new Float64Array(blockSize);
+  let queueIndex = 0;
+  let queueFill = 0;
+  let runningWindowEnergy = 0;
+  let totalWeightedEnergy = 0;
+  const blockEnergies = [];
+  let nextBlockStart = 0;
+
+  for (let i = 0; i < frames; i += 1) {
+    let frameWeightedEnergy = 0;
+
+    for (let channel = 0; channel < channelCount; channel += 1) {
+      const weight = channelWeights[channel];
+      if (weight === 0) {
+        continue;
+      }
+
+      const x = channelData[channel][i];
+      const state = states[channel];
+
+      const y1 = highpass.b0 * x + state.hpZ1;
+      state.hpZ1 = highpass.b1 * x - highpass.a1 * y1 + state.hpZ2;
+      state.hpZ2 = highpass.b2 * x - highpass.a2 * y1;
+
+      const y2 = lowpass.b0 * y1 + state.lpZ1;
+      state.lpZ1 = lowpass.b1 * y1 - lowpass.a1 * y2 + state.lpZ2;
+      state.lpZ2 = lowpass.b2 * y1 - lowpass.a2 * y2;
+
+      frameWeightedEnergy += weight * y2 * y2;
+    }
+
+    totalWeightedEnergy += frameWeightedEnergy;
+
+    if (queueFill < blockSize) {
+      windowEnergies[queueIndex] = frameWeightedEnergy;
+      runningWindowEnergy += frameWeightedEnergy;
+      queueFill += 1;
+      queueIndex = (queueIndex + 1) % blockSize;
+    } else {
+      const evictedEnergy = windowEnergies[queueIndex];
+      windowEnergies[queueIndex] = frameWeightedEnergy;
+      runningWindowEnergy += frameWeightedEnergy - evictedEnergy;
+      queueIndex = (queueIndex + 1) % blockSize;
+    }
+
+    if (queueFill === blockSize) {
+      const blockStart = i - blockSize + 1;
+      if (blockStart === nextBlockStart) {
+        blockEnergies.push(runningWindowEnergy / blockSize);
+        nextBlockStart += hopSize;
+      }
+    }
+  }
+
+  if (blockEnergies.length === 0) {
+    blockEnergies.push(totalWeightedEnergy / frames);
+  }
+
+  const absoluteGatedEnergies = [];
+  let absoluteGatedEnergySum = 0;
+  for (const blockEnergy of blockEnergies) {
+    if (blockEnergy >= absoluteGateEnergy) {
+      absoluteGatedEnergies.push(blockEnergy);
+      absoluteGatedEnergySum += blockEnergy;
+    }
+  }
+
+  if (absoluteGatedEnergies.length === 0) {
+    return -Infinity;
+  }
+
+  const absoluteGatedMeanEnergy = absoluteGatedEnergySum / absoluteGatedEnergies.length;
+  const relativeGateEnergy = absoluteGatedMeanEnergy / 10;
+
+  let integratedEnergySum = 0;
+  let integratedCount = 0;
+  for (const blockEnergy of absoluteGatedEnergies) {
+    if (blockEnergy >= relativeGateEnergy) {
+      integratedEnergySum += blockEnergy;
+      integratedCount += 1;
+    }
+  }
+
+  if (!integratedCount) {
+    return -Infinity;
+  }
+
+  const integratedEnergy = integratedEnergySum / integratedCount;
+  if (!(integratedEnergy > 0)) {
+    return -Infinity;
+  }
+
+  return -0.691 + 10 * Math.log10(integratedEnergy);
+}
+
+function measureEarSensitivityRms(audioBuffer) {
+  const sampleRate = audioBuffer.sampleRate;
+  const frames = audioBuffer.length;
+  const channelCount = audioBuffer.numberOfChannels;
+  if (!frames || !channelCount) {
+    return -Infinity;
+  }
+
+  const highpass = designBiquad({
+    type: "highpass",
+    frequency: 1000,
+    q: 0.7071,
+    sampleRate,
+  });
+  const lowpass = designBiquad({
+    type: "lowpass",
+    frequency: 4000,
+    q: 0.7071,
+    sampleRate,
+  });
+
+  const blockSize = Math.max(1, Math.floor(0.4 * sampleRate));
+  const hopSize = Math.max(1, Math.floor(0.1 * sampleRate));
+  const absoluteGateEnergy = 10 ** ((-70 + 0.691) / 10);
+
+  const channelData = new Array(channelCount);
+  const channelWeights = new Array(channelCount);
+  const states = new Array(channelCount);
+
+  for (let channel = 0; channel < channelCount; channel += 1) {
+    channelData[channel] = audioBuffer.getChannelData(channel);
+    channelWeights[channel] = getBs1770ChannelWeight(channel, channelCount);
+    states[channel] = {
+      hpZ1: 0,
+      hpZ2: 0,
+      lpZ1: 0,
+      lpZ2: 0,
+    };
+  }
+
+  const windowEnergies = new Float64Array(blockSize);
+  let queueIndex = 0;
+  let queueFill = 0;
+  let runningWindowEnergy = 0;
+  let totalWeightedEnergy = 0;
+  const blockEnergies = [];
+  let nextBlockStart = 0;
+
+  for (let i = 0; i < frames; i += 1) {
+    let frameWeightedEnergy = 0;
+
+    for (let channel = 0; channel < channelCount; channel += 1) {
+      const weight = channelWeights[channel];
+      if (weight === 0) {
+        continue;
+      }
+
+      const x = channelData[channel][i];
+      const state = states[channel];
+
+      const y1 = highpass.b0 * x + state.hpZ1;
+      state.hpZ1 = highpass.b1 * x - highpass.a1 * y1 + state.hpZ2;
+      state.hpZ2 = highpass.b2 * x - highpass.a2 * y1;
+
+      const y2 = lowpass.b0 * y1 + state.lpZ1;
+      state.lpZ1 = lowpass.b1 * y1 - lowpass.a1 * y2 + state.lpZ2;
+      state.lpZ2 = lowpass.b2 * y1 - lowpass.a2 * y2;
+
+      frameWeightedEnergy += weight * y2 * y2;
+    }
+
+    totalWeightedEnergy += frameWeightedEnergy;
+
+    if (queueFill < blockSize) {
+      windowEnergies[queueIndex] = frameWeightedEnergy;
+      runningWindowEnergy += frameWeightedEnergy;
+      queueFill += 1;
+      queueIndex = (queueIndex + 1) % blockSize;
+    } else {
+      const evictedEnergy = windowEnergies[queueIndex];
+      windowEnergies[queueIndex] = frameWeightedEnergy;
+      runningWindowEnergy += frameWeightedEnergy - evictedEnergy;
+      queueIndex = (queueIndex + 1) % blockSize;
+    }
+
+    if (queueFill === blockSize) {
+      const blockStart = i - blockSize + 1;
+      if (blockStart === nextBlockStart) {
+        blockEnergies.push(runningWindowEnergy / blockSize);
+        nextBlockStart += hopSize;
+      }
+    }
+  }
+
+  if (blockEnergies.length === 0) {
+    blockEnergies.push(totalWeightedEnergy / frames);
+  }
+
+  const absoluteGatedEnergies = [];
+  let absoluteGatedEnergySum = 0;
+  for (const blockEnergy of blockEnergies) {
+    if (blockEnergy >= absoluteGateEnergy) {
+      absoluteGatedEnergies.push(blockEnergy);
+      absoluteGatedEnergySum += blockEnergy;
+    }
+  }
+
+  if (absoluteGatedEnergies.length === 0) {
+    return -Infinity;
+  }
+
+  const absoluteGatedMeanEnergy = absoluteGatedEnergySum / absoluteGatedEnergies.length;
+  const relativeGateEnergy = absoluteGatedMeanEnergy / 10;
+
   let integratedEnergySum = 0;
   let integratedCount = 0;
   for (const blockEnergy of absoluteGatedEnergies) {
@@ -437,7 +819,7 @@ export class AudioEngine extends EventTarget {
     this.dispatchEvent(new CustomEvent("state", { detail: this.getState() }));
   }
 
-  async prepareTrack({ trackUrl, presets, onProgress }) {
+  async prepareTrack({ trackUrl, presets, onProgress, normalizationMode = "earsens" }) {
     const context = await this.ensureContext();
 
     if (!Array.isArray(presets) || presets.length === 0) {
@@ -457,12 +839,18 @@ export class AudioEngine extends EventTarget {
     const sourceBuffer = await context.decodeAudioData(encoded.slice(0));
     onProgress?.({ done: 2, total: totalSteps, message: "Rendering presets..." });
 
+    const measureLoudness = normalizationMode === "earsens" ? measureEarSensitivityRms
+      : normalizationMode === "treble" ? measureBandpassRms
+      : normalizationMode === "rms" ? measureFlatRms
+      : normalizationMode === "lufs" ? measureKWeightedLufs
+      : measureEarSensitivityRms;
+
     let completed = 0;
     const rendered = await mapWithConcurrency(presets, 3, async (preset) => {
       const renderedBuffer = await renderPresetWithOfflineContext(sourceBuffer, preset)
         ?? renderPresetWithInPlaceFilters(context, sourceBuffer, preset);
 
-      const lufs = measureKWeightedLufs(renderedBuffer);
+      const measuredDb = measureLoudness(renderedBuffer);
       completed += 1;
       onProgress?.({
         done: 2 + completed,
@@ -474,18 +862,18 @@ export class AudioEngine extends EventTarget {
         id: preset.id,
         name: preset.name,
         buffer: renderedBuffer,
-        lufs,
+        measuredDb,
       };
     });
 
-    const validLufs = rendered
-      .map((variant) => variant.lufs)
-      .filter((lufs) => Number.isFinite(lufs));
-    const targetLufs = validLufs.length > 0 ? Math.min(...validLufs) : -Infinity;
+    const validMeasuredDb = rendered
+      .map((variant) => variant.measuredDb)
+      .filter((measuredDb) => Number.isFinite(measuredDb));
+    const targetMeasuredDb = validMeasuredDb.length > 0 ? Math.min(...validMeasuredDb) : -Infinity;
 
     for (const variant of rendered) {
-      const normalizationDb = Number.isFinite(targetLufs) && Number.isFinite(variant.lufs)
-        ? targetLufs - variant.lufs
+      const normalizationDb = Number.isFinite(targetMeasuredDb) && Number.isFinite(variant.measuredDb)
+        ? targetMeasuredDb - variant.measuredDb
         : 0;
       applyGainToBuffer(variant.buffer, dbToLinear(normalizationDb));
       variant.normalizationDb = normalizationDb;

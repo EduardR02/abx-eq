@@ -39,7 +39,23 @@ mkdir music presets_for_shootout
 
 bun run server.ts
 # http://localhost:3000
+
+# optional: open Setup -> Directories in the web UI
+# and switch to custom music/preset folders
 ```
+
+## Configuration
+
+By default, the app reads tracks from `music/` and presets from `presets_for_shootout/`.
+
+You can change both at runtime from the web UI:
+
+1. Open **Setup**
+2. Expand **Directories**
+3. Enter project-relative paths for music and presets
+4. Click **Apply** to validate and reload presets/tracks
+
+The server validates both directories before accepting the change.
 
 ## Preset format
 
@@ -61,6 +77,34 @@ Filter 3: ON PK Fc 2204 Hz Gain 1.73 dB Q 1.414
 3. Switching = swapping gain values with a 5ms crossfade. Zero gap, zero click.
 4. Pairs scheduled adaptively: round-robin for initial coverage, then uncertainty sampling focuses on the closest-ranked presets
 
+## Loudness normalization
+
+Fair comparison needs loudness matching — otherwise you'll just prefer whichever version is louder. The question is *how* to measure loudness, and the answer depends on what you're comparing.
+
+The tool offers four normalization modes (selectable in Setup before starting a test):
+
+**Ear sensitivity 1–4 kHz (default, recommended)**
+Measures RMS energy only in the 1–4 kHz band — where your ear is most sensitive (ear canal resonance peaks around 2.7 kHz) — and normalizes all presets to match there. Everything outside that band is untouched. This means if one preset boosts bass and another boosts treble sparkle, both differences are fully preserved — only the "perceived volume" is matched.
+
+This is the right choice for most EQ comparisons because EQ presets rarely differ in the 1–4 kHz region (most differences are in bass and 8 kHz+ air/sparkle), so the normalization doesn't eat real differences.
+
+**Treble-matched 2–10 kHz**
+Same idea but wider band. Matches the full treble region. Less accurate — if two presets differ in sparkle or sibilance, this partially absorbs those differences into the gain correction.
+
+**Flat RMS**
+Unweighted RMS across the full spectrum. Treats bass and treble energy equally. Works OK when presets have similar tonal balance, but if one preset boosts bass heavily, the treble ends up quieter (which is the whole problem we were trying to solve).
+
+**K-weighted LUFS (ITU-R BS.1770-4)**
+The broadcast standard. Uses a +4 dB high-shelf above 1.5 kHz and a highpass at 38 Hz. Originally designed for broadcast loudness compliance, not EQ comparison. The K-weighting actually makes the problem worse for our use case: it overvalues treble energy and undervalues bass, so a bass-boosted preset sounds quieter than it should after normalization.
+
+### How we got here
+
+The original implementation used K-weighted LUFS — the "correct" standard. But in practice, comparing a bass-boosting EQ preset against flat/no-EQ, the flat version consistently sounded "more detailed" and "clearer" simply because its treble was louder after normalization. The bass energy was being discounted by K-weighting.
+
+Flat RMS helped but didn't fully solve it. The key insight: when you listen to music and adjust the volume, you're matching the 1–4 kHz region — where your ear is most sensitive. Bass isn't perceived as "loudness" in the same way. So the fairest normalization matches energy in that sensitivity band and lets bass/treble differences speak for themselves.
+
+This is still an evolving area. The 1–4 kHz default works well for typical headphone EQ comparisons but isn't perfect for every scenario — hence the four options.
+
 ## Built with
 
 Coded in ~15 minutes using [opencode](https://github.com/anomalyco/opencode) with Claude, GPT, and Gemini. The EQ presets and music are personal — the tool itself is general purpose.
@@ -76,7 +120,7 @@ Key things you won't get from reading the code:
 - **User content goes in `music/` and `presets_for_shootout/`** (both gitignored). The app reads these directories on the fly via API.
 - **The core architectural invariant:** all EQ variants are pre-rendered into separate `AudioBuffer`s, loudness-normalized, then played simultaneously through per-variant `GainNode`s. Switching active preset = setting one gain to 1 and the rest to 0. This is what makes switching instant. Don't break this — if you make variants play sequentially or recreate sources on switch, you'll get gaps.
 - **EQ math uses manual RBJ biquad coefficients**, not Web Audio `BiquadFilterNode`, to avoid shelf filter Q-mapping ambiguity with EqualizerAPO. The implementation is in `audio-engine.js`.
-- **API routes:** `GET /api/presets` (parsed from `presets_for_shootout/`), `GET /api/tracks` (from `music/`), `GET /music/:filename` (WAV serving with range support).
+- **API routes:** `GET /api/config` (current directory config), `POST /api/config` (update `musicDir` / `presetsDir`), `GET /api/presets`, `GET /api/tracks`, `GET /music/:filename` (WAV serving with range support).
 
 </details>
 

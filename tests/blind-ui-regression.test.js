@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 const appSource = readFileSync(join(import.meta.dir, "..", "public", "app.js"), "utf8");
 const htmlSource = readFileSync(join(import.meta.dir, "..", "public", "index.html"), "utf8");
+const styleSource = readFileSync(join(import.meta.dir, "..", "public", "style.css"), "utf8");
 
 describe("blind UI regression checks", () => {
   test("preference screen keeps matchup labels blinded", () => {
@@ -27,5 +28,50 @@ describe("blind UI regression checks", () => {
     expect(appSource).toContain("audio.setActiveVariant(pair.presetA);");
     expect(appSource).toContain("setActiveButton(dom.buttonA, true);");
     expect(appSource).toContain("setActiveButton(dom.buttonB, false);");
+  });
+
+  test("background gradients stay seamless during scrolling", () => {
+    expect(styleSource).toContain("radial-gradient(ellipse at 12% 10%");
+    expect(styleSource).toContain("radial-gradient(ellipse at 88% 0%");
+    expect(styleSource).toContain("rgba(196, 167, 231, 0.06)");
+    expect(styleSource).toContain("rgba(235, 111, 146, 0.055)");
+    expect(styleSource).toContain("background-size: 220vmax 220vmax, 220vmax 220vmax;");
+    expect(styleSource).toContain("background-color: transparent;");
+  });
+
+  test("setup includes configurable directories controls", () => {
+    expect(htmlSource).toContain('id="directories-panel"');
+    expect(htmlSource).toContain('id="music-dir-input"');
+    expect(htmlSource).toContain('id="music-dir-browse"');
+    expect(htmlSource).toContain('id="presets-dir-input"');
+    expect(htmlSource).toContain('id="presets-dir-browse"');
+    expect(htmlSource).toContain('id="apply-directories"');
+    expect(appSource).toContain('fetch("/api/config")');
+    expect(appSource).toContain('fetch("/api/browse"');
+  });
+
+  test("loop range uses a dedicated animated playback row", () => {
+    expect(htmlSource).toContain('id="loop-info-row"');
+    expect(htmlSource).toContain('id="loop-times"');
+    expect(htmlSource.indexOf('id="loop-info-row"')).toBeLessThan(htmlSource.indexOf('class="controls-row"'));
+    expect(appSource).toContain("function formatLoopRangeLabel(startTime, endTime)");
+    expect(appSource).toContain('return `Loop: ${formatTime(startTime)} - ${formatTime(endTime)}`;');
+    expect(appSource).toContain("dom.loopInfoRow.classList.toggle(\"is-active\", loopActive);");
+    expect(appSource).toContain("dom.timeLabel.textContent = formatTimeLabel(currentTime, duration);");
+    expect(styleSource).toContain(".loop-info-row");
+    expect(styleSource).toContain("transition: max-height 0.3s ease");
+    expect(styleSource).toContain("min-width: max-content;");
+  });
+
+  test("preference progress only uses inline text, not toast popups", () => {
+    const toastReferenceCount = appSource.match(/showPreferenceToast\(/g)?.length ?? 0;
+    expect(toastReferenceCount).toBe(1);
+    expect(appSource).toContain('dom.prefProgress.textContent = `Matchup ${matchupNumber} of ${progress.total} (${formatPhaseLabel(progress.phase)})`;');
+  });
+
+  test("playback transport uses SVG icons", () => {
+    expect(htmlSource).toContain('id="play-pause" class="icon-btn play-main"');
+    expect(htmlSource).toContain("<svg viewBox=\"0 0 24 24\"");
+    expect(appSource).toContain("dom.playPauseBtn.innerHTML = playback.isPlaying ? PAUSE_ICON_SVG : PLAY_ICON_SVG;");
   });
 });

@@ -23,12 +23,28 @@ const ROUND_COMPLETE_MS = 2000;
 const TOAST_MS = 1500;
 const LOOP_DEFAULT_SECONDS = 10;
 const LOOP_MIN_SECONDS = 1;
+const PLAYBACK_HIDE_MS = 420;
+const DIRECTORY_DETAILS_STORAGE_KEY = "abxEq.directoryDetailsOpen.v1";
+
+const PLAY_ICON_SVG = `
+  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path class="icon-fill" d="M8 6L18 12L8 18V6Z"></path>
+  </svg>
+`;
+
+const PAUSE_ICON_SVG = `
+  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect class="icon-fill" x="7" y="6" width="4" height="12" rx="1"></rect>
+    <rect class="icon-fill" x="13" y="6" width="4" height="12" rx="1"></rect>
+  </svg>
+`;
 
 const state = {
   presets: [],
   tracks: [],
   selectedPresetIds: [],
   selectedTrack: "",
+  normalizationMode: "earsens",
   mode: null,
   selectionKey: "",
 
@@ -60,6 +76,7 @@ const state = {
   loopDragHandle: null,
   loopDragPointerId: null,
   prepareToken: 0,
+  playbackHideTimer: null,
 };
 
 const audio = new AudioEngine();
@@ -75,8 +92,16 @@ const dom = {
   playbackControls: document.getElementById("playback-controls"),
 
   setupError: document.getElementById("setup-error"),
+  directoriesPanel: document.getElementById("directories-panel"),
+  musicDirInput: document.getElementById("music-dir-input"),
+  presetsDirInput: document.getElementById("presets-dir-input"),
+  musicDirBrowseBtn: document.getElementById("music-dir-browse"),
+  presetsDirBrowseBtn: document.getElementById("presets-dir-browse"),
+  applyDirectoriesBtn: document.getElementById("apply-directories"),
+  directoriesFeedback: document.getElementById("directories-feedback"),
   presetList: document.getElementById("preset-list"),
   setupTrackSelect: document.getElementById("track-select-setup"),
+  normalizationMode: document.getElementById("normalization-mode"),
   roundsQuickBtn: document.getElementById("rounds-quick"),
   roundsStandardBtn: document.getElementById("rounds-standard"),
   roundsRigorousBtn: document.getElementById("rounds-rigorous"),
@@ -125,8 +150,9 @@ const dom = {
   loopHandleStart: document.getElementById("loop-handle-start"),
   loopHandleEnd: document.getElementById("loop-handle-end"),
   timeLabel: document.getElementById("time-label"),
-  loopToggleBtn: document.getElementById("loop-toggle"),
+  loopInfoRow: document.getElementById("loop-info-row"),
   loopTimes: document.getElementById("loop-times"),
+  loopToggleBtn: document.getElementById("loop-toggle"),
   volumeSlider: document.getElementById("volume"),
 
   resultsTitle: document.getElementById("results-title"),
@@ -192,6 +218,13 @@ function getSelectionKey(ids) {
   return [...ids].sort((a, b) => a.localeCompare(b)).join("|");
 }
 
+function normalizeNormalizationMode(value) {
+  if (value === "earsens" || value === "treble" || value === "rms" || value === "lufs") {
+    return value;
+  }
+  return "earsens";
+}
+
 function listCurrentPresets() {
   return state.selectedPresetIds
     .map((id) => getPresetById(id))
@@ -213,13 +246,40 @@ function showScreen(name) {
   }
 
   const showPlayback = name === "preference" || name === "abx";
-  dom.playbackControls.classList.toggle("hidden", !showPlayback);
+
+  if (showPlayback) {
+    if (state.playbackHideTimer) {
+      clearTimeout(state.playbackHideTimer);
+      state.playbackHideTimer = null;
+    }
+    dom.playbackControls.classList.remove("hidden");
+    requestAnimationFrame(() => {
+      dom.playbackControls.classList.add("is-visible");
+    });
+  } else {
+    dom.playbackControls.classList.remove("is-visible");
+    if (state.playbackHideTimer) {
+      clearTimeout(state.playbackHideTimer);
+    }
+    state.playbackHideTimer = setTimeout(() => {
+      dom.playbackControls.classList.add("hidden");
+      state.playbackHideTimer = null;
+    }, PLAYBACK_HIDE_MS);
+  }
+
   dom.backToSetup.classList.toggle("hidden", name === "setup");
 }
 
 function setSetupError(message) {
   dom.setupError.textContent = message || "";
   dom.setupError.classList.toggle("hidden", !message);
+}
+
+function setDirectoryFeedback(message, kind = "info") {
+  dom.directoriesFeedback.textContent = message || "";
+  dom.directoriesFeedback.classList.toggle("hidden", !message);
+  dom.directoriesFeedback.classList.toggle("is-success", kind === "success");
+  dom.directoriesFeedback.classList.toggle("is-error", kind === "error");
 }
 
 function buildAbxPairs(presetIds) {
@@ -255,8 +315,12 @@ function getLoopMinLength(duration) {
   return Math.min(LOOP_MIN_SECONDS, duration);
 }
 
-function formatLoopTimes(startTime, endTime) {
+function formatLoopRangeLabel(startTime, endTime) {
   return `Loop: ${formatTime(startTime)} - ${formatTime(endTime)}`;
+}
+
+function formatTimeLabel(currentTime, duration) {
+  return `${formatTime(currentTime)} / ${formatTime(duration)}`;
 }
 
 function clampLoopRange(startTime, endTime, duration) {
@@ -289,9 +353,7 @@ function clampLoopRange(startTime, endTime, duration) {
   };
 }
 
-function updateLoopUi() {
-  const playback = audio.getState();
-  const duration = playback.duration || 0;
+function updateLoopUi(duration = audio.getState().duration || 0) {
   const loop = audio.getLoopState();
   const loopActive = loop.enabled && duration > 0;
 
@@ -299,11 +361,12 @@ function updateLoopUi() {
   dom.loopRegion.classList.toggle("hidden", !loopActive);
   dom.loopHandleStart.classList.toggle("hidden", !loopActive);
   dom.loopHandleEnd.classList.toggle("hidden", !loopActive);
-  dom.loopTimes.classList.toggle("hidden", !loopActive);
+  dom.loopInfoRow.classList.toggle("is-active", loopActive);
+  dom.loopInfoRow.setAttribute("aria-hidden", String(!loopActive));
 
   if (!loopActive) {
-    dom.loopTimes.textContent = formatLoopTimes(0, 0);
-    return;
+    dom.loopTimes.textContent = "Loop: 0:00 - 0:00";
+    return null;
   }
 
   const range = clampLoopRange(loop.startTime, loop.endTime, duration);
@@ -314,7 +377,8 @@ function updateLoopUi() {
   dom.loopRegion.style.width = `${Math.max(0, endPercent - startPercent)}%`;
   dom.loopHandleStart.style.left = `${startPercent}%`;
   dom.loopHandleEnd.style.left = `${endPercent}%`;
-  dom.loopTimes.textContent = formatLoopTimes(range.startTime, range.endTime);
+  dom.loopTimes.textContent = formatLoopRangeLabel(range.startTime, range.endTime);
+  return range;
 }
 
 function updatePlaybackUi() {
@@ -327,9 +391,14 @@ function updatePlaybackUi() {
     dom.seekSlider.value = String(currentTime);
   }
 
-  dom.playPauseBtn.textContent = playback.isPlaying ? "⏸" : "▶";
-  dom.timeLabel.textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
-  updateLoopUi();
+  const playbackState = playback.isPlaying ? "playing" : "paused";
+  if (dom.playPauseBtn.dataset.state !== playbackState) {
+    dom.playPauseBtn.dataset.state = playbackState;
+    dom.playPauseBtn.innerHTML = playback.isPlaying ? PAUSE_ICON_SVG : PLAY_ICON_SVG;
+  }
+  dom.playPauseBtn.classList.toggle("is-playing", playback.isPlaying);
+  updateLoopUi(duration);
+  dom.timeLabel.textContent = formatTimeLabel(currentTime, duration);
 }
 
 function setActiveButton(button, active) {
@@ -507,6 +576,9 @@ function renderResults() {
   for (let i = 0; i < btStandings.length; i += 1) {
     const row = btStandings[i];
     const tr = document.createElement("tr");
+    if (i < 3) {
+      tr.classList.add(`rank-${i + 1}`);
+    }
     tr.innerHTML = `
       <td>${i + 1}</td>
       <td>${row.name}</td>
@@ -758,6 +830,7 @@ async function prepareTrackForSelection() {
   const result = await audio.prepareTrack({
     trackUrl,
     presets: activePresets,
+    normalizationMode: state.normalizationMode,
     onProgress: ({ done, total, message }) => {
       if (token !== state.prepareToken) {
         return;
@@ -871,10 +944,6 @@ async function advancePreference(choice, selectedButton) {
     setActiveButton(dom.buttonB, false);
     updatePreferenceUi();
     dom.preferenceStage.classList.remove("is-fading");
-    const progress = state.preferenceScheduler?.progress;
-    if (progress && progress.done < progress.total) {
-      showPreferenceToast(`Matchup ${progress.done + 1} of ${progress.total}`);
-    }
     await delay(TRANSITION_MS);
     if (!isPreferenceScreenActive()) {
       return;
@@ -896,6 +965,7 @@ async function startPreferenceMode() {
   setSetupError("");
   state.selectedPresetIds = getSelectedPresetIdsFromSetup();
   state.selectedTrack = dom.setupTrackSelect.value;
+  state.normalizationMode = normalizeNormalizationMode(dom.normalizationMode.value || "earsens");
 
   if (state.selectedPresetIds.length < 2) {
     setSetupError("Select at least two presets.");
@@ -926,16 +996,13 @@ async function startPreferenceMode() {
   await prepareTrackForSelection();
   showScreen("preference");
   loadCurrentPair({ autoPlay: true });
-  const progress = state.preferenceScheduler.progress;
-  if (progress.total > 0 && !state.preferenceScheduler.isComplete) {
-    showPreferenceToast(`Matchup ${progress.done + 1} of ${progress.total}`);
-  }
 }
 
 async function startAbxMode() {
   setSetupError("");
   state.selectedPresetIds = getSelectedPresetIdsFromSetup();
   state.selectedTrack = dom.setupTrackSelect.value;
+  state.normalizationMode = normalizeNormalizationMode(dom.normalizationMode.value || "earsens");
 
   if (state.selectedPresetIds.length < 2) {
     setSetupError("Select at least two presets.");
@@ -1299,6 +1366,7 @@ function handleKeyboard(event) {
 }
 
 async function loadInitialData() {
+  const previousTrack = state.selectedTrack;
   const [presetsResponse, tracksResponse] = await Promise.all([
     fetch("/api/presets"),
     fetch("/api/tracks"),
@@ -1333,14 +1401,138 @@ async function loadInitialData() {
     noEqPreset,
   ];
   state.tracks = tracks;
-  state.selectedTrack = tracks[0] ?? "";
+  state.selectedTrack = tracks.includes(previousTrack) ? previousTrack : tracks[0] ?? "";
+  dom.normalizationMode.value = state.normalizationMode;
 
   renderPresetChecklist();
   renderTrackSelects();
   setSelectedMatchups(getRoundPlanMatchups("standard"), "standard");
 }
 
+async function loadDirectoryConfig() {
+  const response = await fetch("/api/config");
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || "Failed to load directory config.");
+  }
+
+  const config = await response.json();
+  dom.musicDirInput.value = config.musicDir || "music";
+  dom.presetsDirInput.value = config.presetsDir || "presets_for_shootout";
+}
+
+function setBrowseButtonsDisabled(disabled) {
+  dom.musicDirBrowseBtn.disabled = disabled;
+  dom.presetsDirBrowseBtn.disabled = disabled;
+}
+
+async function browseDirectoryIntoInput(input) {
+  dom.applyDirectoriesBtn.disabled = true;
+  setBrowseButtonsDisabled(true);
+  setDirectoryFeedback("Opening folder picker...");
+
+  try {
+    const response = await fetch("/api/browse", {
+      method: "POST",
+    });
+
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(body.error || "Failed to open folder picker.");
+    }
+
+    if (body.cancelled) {
+      setDirectoryFeedback("Folder selection cancelled.");
+      return;
+    }
+
+    if (typeof body.path !== "string" || !body.path.trim()) {
+      throw new Error("Folder picker returned an invalid path.");
+    }
+
+    input.value = body.path;
+    setDirectoryFeedback("Folder selected. Click Apply to use it.", "success");
+  } catch (error) {
+    setDirectoryFeedback(error instanceof Error ? error.message : String(error), "error");
+  } finally {
+    setBrowseButtonsDisabled(false);
+    dom.applyDirectoriesBtn.disabled = false;
+  }
+}
+
+async function applyDirectoryConfig() {
+  const payload = {
+    musicDir: dom.musicDirInput.value.trim(),
+    presetsDir: dom.presetsDirInput.value.trim(),
+  };
+
+  dom.applyDirectoriesBtn.disabled = true;
+  setBrowseButtonsDisabled(true);
+  setDirectoryFeedback("Applying directory config...");
+
+  try {
+    const response = await fetch("/api/config", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(body.error || "Failed to apply directory config.");
+    }
+
+    dom.musicDirInput.value = body.musicDir || payload.musicDir;
+    dom.presetsDirInput.value = body.presetsDir || payload.presetsDir;
+
+    try {
+      await loadInitialData();
+      setSetupError("");
+      setDirectoryFeedback("Directories updated. Presets and tracks reloaded.", "success");
+    } catch (reloadError) {
+      const message = reloadError instanceof Error ? reloadError.message : String(reloadError);
+      setSetupError(message);
+      setDirectoryFeedback(`Directories updated, but reload failed: ${message}`, "error");
+    }
+  } catch (error) {
+    setDirectoryFeedback(error instanceof Error ? error.message : String(error), "error");
+  } finally {
+    dom.applyDirectoriesBtn.disabled = false;
+    setBrowseButtonsDisabled(false);
+  }
+}
+
+function restoreDirectoryPanelState() {
+  const saved = localStorage.getItem(DIRECTORY_DETAILS_STORAGE_KEY);
+  if (saved === "open") {
+    dom.directoriesPanel.open = true;
+  } else if (saved === "closed") {
+    dom.directoriesPanel.open = false;
+  }
+}
+
 function attachEvents() {
+  dom.applyDirectoriesBtn.addEventListener("click", () => {
+    applyDirectoryConfig();
+  });
+
+  dom.musicDirBrowseBtn.addEventListener("click", () => {
+    browseDirectoryIntoInput(dom.musicDirInput);
+  });
+
+  dom.presetsDirBrowseBtn.addEventListener("click", () => {
+    browseDirectoryIntoInput(dom.presetsDirInput);
+  });
+
+  dom.musicDirInput.addEventListener("input", () => setDirectoryFeedback(""));
+  dom.presetsDirInput.addEventListener("input", () => setDirectoryFeedback(""));
+
+  dom.directoriesPanel.addEventListener("toggle", () => {
+    localStorage.setItem(DIRECTORY_DETAILS_STORAGE_KEY, dom.directoriesPanel.open ? "open" : "closed");
+  });
+
   dom.startPreferenceBtn.addEventListener("click", async () => {
     try {
       await audio.ensureContext();
@@ -1411,6 +1603,14 @@ function attachEvents() {
     dom.abxTrackSelect.value = state.selectedTrack;
   });
 
+  dom.normalizationMode.addEventListener("change", (event) => {
+    if (!(event.target instanceof HTMLSelectElement)) {
+      state.normalizationMode = "earsens";
+      return;
+    }
+    state.normalizationMode = normalizeNormalizationMode(event.target.value || "earsens");
+  });
+
   dom.buttonA.addEventListener("click", () => switchPreferenceSide("A"));
   dom.buttonB.addEventListener("click", () => switchPreferenceSide("B"));
   dom.preferA.addEventListener("click", () => advancePreference("A", dom.preferA));
@@ -1455,7 +1655,8 @@ function attachEvents() {
     if (state.isSeekDragging) {
       const value = Number(dom.seekSlider.value);
       const duration = Number(dom.seekSlider.max) || 0;
-      dom.timeLabel.textContent = `${formatTime(value)} / ${formatTime(duration)}`;
+      updateLoopUi(duration);
+      dom.timeLabel.textContent = formatTimeLabel(value, duration);
     } else {
       audio.seek(Number(dom.seekSlider.value));
     }
@@ -1478,10 +1679,6 @@ function attachEvents() {
     state.isAdvancingPreference = false;
     showScreen("preference");
     loadCurrentPair({ autoPlay: true });
-    const progress = state.preferenceScheduler.progress;
-    if (!state.preferenceScheduler.isComplete) {
-      showPreferenceToast(`Matchup ${progress.done + 1} of ${progress.total}`);
-    }
   });
 
   dom.resultsSetupBtn.addEventListener("click", () => {
@@ -1516,9 +1713,16 @@ function startRenderLoop() {
 
 async function init() {
   loadStore();
+  restoreDirectoryPanelState();
   attachEvents();
   updatePlaybackUi();
   showScreen("setup");
+
+  try {
+    await loadDirectoryConfig();
+  } catch (error) {
+    setDirectoryFeedback(error instanceof Error ? error.message : String(error), "error");
+  }
 
   try {
     await loadInitialData();
