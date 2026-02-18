@@ -502,7 +502,7 @@ export class AudioEngine extends EventTarget {
     this.dispatchEvent(new CustomEvent("state", { detail: this.getState() }));
   }
 
-  async prepareTrack({ trackUrl, presets, onProgress, normalizationMode = "earsens" }) {
+  async prepareTrack({ trackUrl, trackData, presets, onProgress, normalizationMode = "earsens" }) {
     const context = await this.ensureContext();
 
     if (!Array.isArray(presets) || presets.length === 0) {
@@ -510,13 +510,25 @@ export class AudioEngine extends EventTarget {
     }
 
     const totalSteps = presets.length + 2;
-    onProgress?.({ done: 0, total: totalSteps, message: "Downloading track..." });
-    const response = await fetch(trackUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch track: ${response.status} ${response.statusText}`);
+    let encoded;
+
+    if (trackData instanceof ArrayBuffer) {
+      onProgress?.({ done: 1, total: totalSteps, message: "Loading track data..." });
+      encoded = trackData;
+    } else {
+      if (!trackUrl) {
+        throw new Error("Track source is required.");
+      }
+
+      onProgress?.({ done: 0, total: totalSteps, message: "Downloading track..." });
+      const response = await fetch(trackUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch track: ${response.status} ${response.statusText}`);
+      }
+
+      encoded = await response.arrayBuffer();
     }
 
-    const encoded = await response.arrayBuffer();
     onProgress?.({ done: 1, total: totalSteps, message: "Decoding track..." });
 
     const sourceBuffer = await context.decodeAudioData(encoded);

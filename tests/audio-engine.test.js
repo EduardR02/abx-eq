@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { AudioEngine } from "../public/audio-engine.js";
 
 function createFakeParam(initialValue) {
@@ -97,6 +97,57 @@ function configureEngineForPlayback(engine, { duration = 10, contextTime = 3 } =
   engine.duration = duration;
 
   return context;
+}
+
+function createSimpleAudioBuffer({
+  channels = 1,
+  length = 4800,
+  sampleRate = 48000,
+  fillValue = 0.1,
+} = {}) {
+  const dataByChannel = Array.from({ length: channels }, () => {
+    const data = new Float32Array(length);
+    data.fill(fillValue);
+    return data;
+  });
+
+  return {
+    numberOfChannels: channels,
+    length,
+    sampleRate,
+    duration: length / sampleRate,
+    getChannelData(channelIndex) {
+      return dataByChannel[channelIndex];
+    },
+    copyToChannel(channelData, channelIndex) {
+      dataByChannel[channelIndex].set(channelData);
+    },
+  };
+}
+
+function createPrepareTrackContext() {
+  return {
+    currentTime: 0,
+    destination: {},
+    async decodeAudioData() {
+      return createSimpleAudioBuffer();
+    },
+    createBuffer(channels, length, sampleRate) {
+      return createSimpleAudioBuffer({ channels, length, sampleRate, fillValue: 0 });
+    },
+    createGain() {
+      return {
+        gain: {
+          value: 1,
+          setValueAtTime(value) {
+            this.value = value;
+          },
+        },
+        connect() {},
+        disconnect() {},
+      };
+    },
+  };
 }
 
 describe("AudioEngine.setActiveVariant", () => {
@@ -239,5 +290,90 @@ describe("AudioEngine playback looping", () => {
 
     context.currentTime = engine.startedAtContextTime + 3.6;
     expect(engine.getCurrentTime()).toBeCloseTo(2.6, 6);
+  });
+});
+
+describe("AudioEngine.prepareTrack sources", () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+
+  beforeEach(() => {
+    globalThis.window = {};
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  });
+
+  test("uses provided trackData without fetching", async () => {
+    const engine = new AudioEngine();
+    engine.context = createPrepareTrackContext();
+    engine.masterGain = {
+      connect() {},
+      disconnect() {},
+      gain: {
+        value: 1,
+        setValueAtTime(value) {
+          this.value = value;
+        },
+      },
+    };
+
+    let fetchCalled = false;
+    globalThis.fetch = async () => {
+      fetchCalled = true;
+      throw new Error("fetch should not be called");
+    };
+
+    const result = await engine.prepareTrack({
+      trackData: new Uint8Array([1, 2, 3, 4]).buffer,
+      presets: [{ id: "a", name: "A", preampDb: 0, filters: [] }],
+      normalizationMode: "rms",
+    });
+
+    expect(fetchCalled).toBe(false);
+    expect(result.variants).toHaveLength(1);
+    expect(result.variants[0].id).toBe("a");
+  });
+
+  test("falls back to trackUrl fetch for backward compatibility", async () => {
+    const engine = new AudioEngine();
+    engine.context = createPrepareTrackContext();
+    engine.masterGain = {
+      connect() {},
+      disconnect() {},
+      gain: {
+        value: 1,
+        setValueAtTime(value) {
+          this.value = value;
+        },
+      },
+    };
+
+    const fetchCalls = [];
+    globalThis.fetch = async (url) => {
+      fetchCalls.push(url);
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        async arrayBuffer() {
+          return new Uint8Array([5, 6, 7, 8]).buffer;
+        },
+      };
+    };
+
+    await engine.prepareTrack({
+      trackUrl: "/music/example.wav",
+      presets: [{ id: "a", name: "A", preampDb: 0, filters: [] }],
+      normalizationMode: "rms",
+    });
+
+    expect(fetchCalls).toEqual(["/music/example.wav"]);
   });
 });

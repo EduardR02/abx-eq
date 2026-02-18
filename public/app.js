@@ -15,6 +15,7 @@ import {
   buildRoundPlanSuggestions,
   pairCountForPresetCount,
 } from "./round-plan.js";
+import { LocalSource, detectSource } from "./source-adapters.js";
 
 const STORAGE_KEY = "abxEqState.v1";
 const NO_EQ_ID = "__no_eq__";
@@ -58,6 +59,7 @@ const PAUSE_ICON_SVG = `
 `;
 
 const state = {
+  source: null,
   presets: [],
   tracks: [],
   selectedPresetIds: [],
@@ -117,6 +119,11 @@ const dom = {
   presetsDirBrowseBtn: document.getElementById("presets-dir-browse"),
   applyDirectoriesBtn: document.getElementById("apply-directories"),
   directoriesFeedback: document.getElementById("directories-feedback"),
+  localFileArea: document.getElementById("local-file-area"),
+  dropZone: document.getElementById("drop-zone"),
+  filePickerBtn: document.getElementById("file-picker-btn"),
+  filePickerInput: document.getElementById("file-picker-input"),
+  localFileList: document.getElementById("local-file-list"),
   presetList: document.getElementById("preset-list"),
   setupTrackSelect: document.getElementById("track-select-setup"),
   normalizationMode: document.getElementById("normalization-mode"),
@@ -316,6 +323,63 @@ function setDirectoryFeedback(message, kind = "info") {
   dom.directoriesFeedback.classList.toggle("hidden", !message);
   dom.directoriesFeedback.classList.toggle("is-success", kind === "success");
   dom.directoriesFeedback.classList.toggle("is-error", kind === "error");
+}
+
+function isLocalSourceActive() {
+  return state.source instanceof LocalSource;
+}
+
+function syncSourceModeUi() {
+  const supportsDirectoryConfig = Boolean(state.source?.supportsDirectoryConfig);
+  dom.directoriesPanel.classList.toggle("hidden", !supportsDirectoryConfig);
+  dom.localFileArea.classList.toggle("hidden", supportsDirectoryConfig);
+}
+
+function renderLocalFileList() {
+  if (!isLocalSourceActive()) {
+    dom.localFileList.innerHTML = "";
+    return;
+  }
+
+  const presetFiles = state.presets
+    .filter((preset) => preset.id !== NO_EQ_ID)
+    .map((preset) => preset.filename);
+  const trackFiles = [...state.tracks];
+  const totalFiles = presetFiles.length + trackFiles.length;
+
+  dom.localFileList.innerHTML = "";
+
+  if (totalFiles === 0) {
+    const empty = document.createElement("p");
+    empty.className = "local-file-summary";
+    empty.textContent = "No local files loaded yet.";
+    dom.localFileList.appendChild(empty);
+    return;
+  }
+
+  const summary = document.createElement("p");
+  summary.className = "local-file-summary";
+  summary.textContent = `Loaded ${trackFiles.length} track(s) and ${presetFiles.length} preset(s).`;
+  dom.localFileList.appendChild(summary);
+
+  const list = document.createElement("ul");
+  list.className = "local-file-items";
+
+  for (const filename of trackFiles) {
+    const row = document.createElement("li");
+    row.className = "local-file-item";
+    row.textContent = `Track: ${filename}`;
+    list.appendChild(row);
+  }
+
+  for (const filename of presetFiles) {
+    const row = document.createElement("li");
+    row.className = "local-file-item";
+    row.textContent = `Preset: ${filename}`;
+    list.appendChild(row);
+  }
+
+  dom.localFileList.appendChild(list);
 }
 
 function buildAbxPairs(presetIds) {
@@ -1127,15 +1191,18 @@ async function prepareTrackForSelection() {
   if (!state.selectedTrack) {
     throw new Error("Select a track first.");
   }
+  if (!state.source) {
+    throw new Error("Audio source is not ready yet.");
+  }
 
   audio.stop();
   showScreen("loading");
   dom.loadingText.textContent = "Preparing audio...";
   dom.loadingBar.style.width = "0%";
 
-  const trackUrl = `/music/${encodeURIComponent(state.selectedTrack)}`;
+  const trackData = await state.source.loadTrackArrayBuffer(state.selectedTrack);
   const result = await audio.prepareTrack({
-    trackUrl,
+    trackData,
     presets: activePresets,
     normalizationMode: state.normalizationMode,
     onProgress: ({ done, total, message }) => {
@@ -1696,24 +1763,15 @@ function handleKeyboard(event) {
 }
 
 async function loadInitialData() {
+  if (!state.source) {
+    throw new Error("Audio source is not ready yet.");
+  }
+
   const previousTrack = state.selectedTrack;
-  const [presetsResponse, tracksResponse] = await Promise.all([
-    fetch("/api/presets"),
-    fetch("/api/tracks"),
+  const [presets, tracks] = await Promise.all([
+    state.source.listPresets(),
+    state.source.listTracks(),
   ]);
-
-  if (!presetsResponse.ok) {
-    const body = await presetsResponse.json().catch(() => ({}));
-    throw new Error(body.error || "Failed to load presets.");
-  }
-
-  if (!tracksResponse.ok) {
-    const body = await tracksResponse.json().catch(() => ({}));
-    throw new Error(body.error || "Failed to load tracks.");
-  }
-
-  const presets = await presetsResponse.json();
-  const tracks = await tracksResponse.json();
 
   const noEqPreset = {
     id: NO_EQ_ID,
@@ -1726,7 +1784,7 @@ async function loadInitialData() {
   state.presets = [
     ...presets.map((preset) => ({
       ...preset,
-      id: preset.filename,
+      id: preset.id || preset.filename,
     })),
     noEqPreset,
   ];
@@ -1737,16 +1795,23 @@ async function loadInitialData() {
   renderPresetChecklist();
   renderTrackSelects();
   setSelectedMatchups(getRoundPlanMatchups("standard"), "standard");
+  renderLocalFileList();
+}
+
+async function refreshData() {
+  await loadInitialData();
 }
 
 async function loadDirectoryConfig() {
-  const response = await fetch("/api/config");
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || "Failed to load directory config.");
+  if (!state.source) {
+    throw new Error("Audio source is not ready yet.");
   }
 
-  const config = await response.json();
+  const config = await state.source.getConfig();
+  if (!config) {
+    return;
+  }
+
   dom.musicDirInput.value = config.musicDir || "music";
   dom.presetsDirInput.value = config.presetsDir || "presets_for_shootout";
 }
@@ -1762,29 +1827,21 @@ function setDirectoryActionsDisabled(disabled) {
 }
 
 async function browseDirectoryIntoInput(input) {
+  if (!state.source || !state.source.supportsDirectoryConfig) {
+    return;
+  }
+
   setDirectoryActionsDisabled(true);
   setDirectoryFeedback("Opening folder picker...");
 
   try {
-    const response = await fetch("/api/browse", {
-      method: "POST",
-    });
-
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(body.error || "Failed to open folder picker.");
-    }
-
-    if (body.cancelled) {
+    const selectedPath = await state.source.browse();
+    if (!selectedPath) {
       setDirectoryFeedback("Folder selection cancelled.");
       return;
     }
 
-    if (typeof body.path !== "string" || !body.path.trim()) {
-      throw new Error("Folder picker returned an invalid path.");
-    }
-
-    input.value = body.path;
+    input.value = selectedPath;
     setDirectoryFeedback("Folder selected. Click Apply to use it.", "success");
   } catch (error) {
     setDirectoryFeedback(error instanceof Error ? error.message : String(error), "error");
@@ -1794,6 +1851,10 @@ async function browseDirectoryIntoInput(input) {
 }
 
 async function applyDirectoryConfig() {
+  if (!state.source || !state.source.supportsDirectoryConfig) {
+    return;
+  }
+
   const payload = {
     musicDir: dom.musicDirInput.value.trim(),
     presetsDir: dom.presetsDirInput.value.trim(),
@@ -1803,24 +1864,13 @@ async function applyDirectoryConfig() {
   setDirectoryFeedback("Applying directory config...");
 
   try {
-    const response = await fetch("/api/config", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(body.error || "Failed to apply directory config.");
-    }
+    const body = await state.source.setConfig(payload);
 
     dom.musicDirInput.value = body.musicDir || payload.musicDir;
     dom.presetsDirInput.value = body.presetsDir || payload.presetsDir;
 
     try {
-      await loadInitialData();
+      await refreshData();
       setSetupError("");
       setDirectoryFeedback("Directories updated. Presets and tracks reloaded.", "success");
     } catch (reloadError) {
@@ -1832,6 +1882,20 @@ async function applyDirectoryConfig() {
     setDirectoryFeedback(error instanceof Error ? error.message : String(error), "error");
   } finally {
     setDirectoryActionsDisabled(false);
+  }
+}
+
+async function addLocalFiles(fileList) {
+  if (!(state.source instanceof LocalSource) || !fileList || fileList.length === 0) {
+    return;
+  }
+
+  try {
+    await state.source.addFiles(fileList);
+    await refreshData();
+    setSetupError("");
+  } catch (error) {
+    setSetupError(error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -1941,6 +2005,45 @@ function handleSetupTrackSelectChange(event) {
   syncTrackSelects();
 }
 
+function setDropZoneActive(active) {
+  dom.dropZone.classList.toggle("is-dragover", active);
+}
+
+function handleDropZoneDragOver(event) {
+  event.preventDefault();
+  if (!isLocalSourceActive()) {
+    return;
+  }
+  setDropZoneActive(true);
+}
+
+function handleDropZoneDragLeave(event) {
+  const relatedTarget = event.relatedTarget;
+  if (relatedTarget instanceof Node && dom.dropZone.contains(relatedTarget)) {
+    return;
+  }
+  setDropZoneActive(false);
+}
+
+async function handleDropZoneDrop(event) {
+  event.preventDefault();
+  setDropZoneActive(false);
+  if (!isLocalSourceActive()) {
+    return;
+  }
+
+  await addLocalFiles(event.dataTransfer?.files);
+}
+
+async function handleFilePickerChange(event) {
+  if (!(event.target instanceof HTMLInputElement)) {
+    return;
+  }
+
+  await addLocalFiles(event.target.files);
+  event.target.value = "";
+}
+
 function attachEvents() {
   dom.applyDirectoriesBtn.addEventListener("click", () => {
     applyDirectoryConfig();
@@ -1963,6 +2066,14 @@ function attachEvents() {
   dom.directoriesPanel.addEventListener("toggle", () => {
     localStorage.setItem(DIRECTORY_DETAILS_STORAGE_KEY, dom.directoriesPanel.open ? "open" : "closed");
   });
+
+  dom.filePickerBtn.addEventListener("click", () => {
+    dom.filePickerInput.click();
+  });
+  dom.filePickerInput.addEventListener("change", handleFilePickerChange);
+  dom.dropZone.addEventListener("dragover", handleDropZoneDragOver);
+  dom.dropZone.addEventListener("dragleave", handleDropZoneDragLeave);
+  dom.dropZone.addEventListener("drop", handleDropZoneDrop);
 
   dom.startPreferenceBtn.addEventListener("click", () => {
     withAudioContext(startPreferenceMode);
@@ -2153,18 +2264,24 @@ async function init() {
   updatePlaybackUi();
   showScreen("setup");
 
-  try {
-    await loadDirectoryConfig();
-  } catch (error) {
-    setDirectoryFeedback(error instanceof Error ? error.message : String(error), "error");
+  state.source = await detectSource();
+  syncSourceModeUi();
+
+  if (state.source.supportsDirectoryConfig) {
+    try {
+      await loadDirectoryConfig();
+    } catch (error) {
+      setDirectoryFeedback(error instanceof Error ? error.message : String(error), "error");
+    }
+  } else {
+    setDirectoryFeedback("");
   }
 
   try {
-    await loadInitialData();
+    await refreshData();
   } catch (error) {
     setSetupError(error instanceof Error ? error.message : String(error));
   }
-
 }
 
 init();

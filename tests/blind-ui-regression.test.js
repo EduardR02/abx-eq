@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const appSource = readFileSync(join(import.meta.dir, "..", "public", "app.js"), "utf8");
+const adaptersSource = readFileSync(join(import.meta.dir, "..", "public", "source-adapters.js"), "utf8");
 const htmlSource = readFileSync(join(import.meta.dir, "..", "public", "index.html"), "utf8");
 const styleSource = readFileSync(join(import.meta.dir, "..", "public", "style.css"), "utf8");
 
@@ -81,8 +82,22 @@ describe("blind UI regression checks", () => {
     expect(htmlSource).toContain('id="presets-dir-input"');
     expect(htmlSource).toContain('id="presets-dir-browse"');
     expect(htmlSource).toContain('id="apply-directories"');
-    expect(appSource).toContain('fetch("/api/config")');
-    expect(appSource).toContain('fetch("/api/browse"');
+    expect(appSource).toContain("state.source.supportsDirectoryConfig");
+    expect(adaptersSource).toContain('fetch("/api/config"');
+    expect(adaptersSource).toContain('"/api/browse"');
+    expect(adaptersSource).toContain('"/api/presets"');
+    expect(adaptersSource).toContain('"/api/tracks"');
+  });
+
+  test("setup includes local file loading controls for static mode", () => {
+    expect(htmlSource).toContain('id="local-file-area"');
+    expect(htmlSource).toContain('id="drop-zone"');
+    expect(htmlSource).toContain('id="file-picker-btn"');
+    expect(htmlSource).toContain('id="file-picker-input"');
+    expect(htmlSource).toContain('id="local-file-list"');
+    expect(appSource).toContain("function renderLocalFileList()");
+    expect(styleSource).toContain(".drop-zone");
+    expect(styleSource).toContain(".drop-zone.is-dragover");
   });
 
   test("loop range uses a dedicated animated playback row", () => {

@@ -47,6 +47,16 @@
                 </div>
               </details>
 
+              <div id="local-file-area" class="local-file-area hidden">
+                <div class="drop-zone" id="drop-zone">
+                  <p class="drop-zone-text">Drop your .wav tracks and .txt EQ presets here</p>
+                  <p class="drop-zone-hint">or</p>
+                  <button id="file-picker-btn" class="secondary" type="button">Choose files</button>
+                  <input type="file" id="file-picker-input" multiple accept=".wav,.txt" class="visually-hidden">
+                </div>
+                <div id="local-file-list" class="local-file-list"></div>
+              </div>
+
               <h3>EQ Presets</h3>
               <div id="preset-list" class="preset-list"></div>
               <button id="reset-scores" class="reset-scores" type="button">Reset All Scores</button>
