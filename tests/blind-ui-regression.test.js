@@ -63,6 +63,18 @@ describe("blind UI regression checks", () => {
     expect(styleSource).toContain("min-width: max-content;");
   });
 
+  test("loop handles follow the range thumb travel path", () => {
+    expect(styleSource).toContain("--seek-thumb-size: 12px;");
+    expect(styleSource).toContain("width: var(--seek-thumb-size);");
+    expect(styleSource).toContain("height: var(--seek-thumb-size);");
+    expect(appSource).toContain("function getSeekThumbTravelBounds() {");
+    expect(appSource).toContain("const minX = sliderRect.left + thumbRadius;");
+    expect(appSource).toContain("const maxX = sliderRect.right - thumbRadius;");
+    expect(appSource).toContain("const startPercent = getSeekPositionPercent(range.startTime, duration);");
+    expect(appSource).toContain("const endPercent = getSeekPositionPercent(range.endTime, duration);");
+    expect(appSource).toContain("const clampedX = Math.min(bounds.maxX, Math.max(bounds.minX, clientX));");
+  });
+
   test("preference progress only uses inline text, not toast popups", () => {
     const toastReferenceCount = appSource.match(/showPreferenceToast\(/g)?.length ?? 0;
     expect(toastReferenceCount).toBe(1);

@@ -24,6 +24,8 @@ const TOAST_MS = 1500;
 const LOOP_DEFAULT_SECONDS = 10;
 const LOOP_MIN_SECONDS = 1;
 const PLAYBACK_HIDE_MS = 420;
+const SEEK_THUMB_SIZE_CSS_VAR = "--seek-thumb-size";
+const SEEK_THUMB_RADIUS_FALLBACK_PX = 6;
 const RESET_CONFIRM_MS = 3000;
 const RESET_DONE_MS = 1500;
 const RESET_SCORES_DEFAULT_TEXT = "Reset All Scores";
@@ -359,6 +361,59 @@ function clampLoopRange(startTime, endTime, duration) {
   };
 }
 
+let seekThumbRadiusPx = null;
+
+function getSeekThumbRadiusPx() {
+  if (seekThumbRadiusPx !== null) {
+    return seekThumbRadiusPx;
+  }
+
+  const thumbSizeRaw = getComputedStyle(dom.seekSlider).getPropertyValue(SEEK_THUMB_SIZE_CSS_VAR).trim();
+  const thumbSize = Number.parseFloat(thumbSizeRaw);
+
+  if (Number.isFinite(thumbSize) && thumbSize > 0) {
+    seekThumbRadiusPx = thumbSize / 2;
+  } else {
+    seekThumbRadiusPx = SEEK_THUMB_RADIUS_FALLBACK_PX;
+  }
+
+  return seekThumbRadiusPx;
+}
+
+function getSeekThumbTravelBounds() {
+  const sliderRect = dom.seekSlider.getBoundingClientRect();
+  if (!(sliderRect.width > 0)) {
+    return null;
+  }
+
+  const thumbRadius = Math.min(getSeekThumbRadiusPx(), sliderRect.width / 2);
+  const minX = sliderRect.left + thumbRadius;
+  const maxX = sliderRect.right - thumbRadius;
+
+  return {
+    minX,
+    maxX,
+  };
+}
+
+function getSeekPositionPercent(time, duration) {
+  if (!(duration > 0)) {
+    return 0;
+  }
+
+  const ratio = Math.min(1, Math.max(0, time / duration));
+  const bounds = getSeekThumbTravelBounds();
+  const containerRect = dom.seekSlider.parentElement?.getBoundingClientRect();
+  if (!bounds || !containerRect || !(containerRect.width > 0)) {
+    return ratio * 100;
+  }
+
+  const travelWidth = bounds.maxX - bounds.minX;
+  const centerX = bounds.minX + (travelWidth > 0 ? ratio * travelWidth : 0);
+  const localX = Math.min(containerRect.width, Math.max(0, centerX - containerRect.left));
+  return (localX / containerRect.width) * 100;
+}
+
 function updateLoopUi(duration = audio.getState().duration || 0) {
   const loop = audio.getLoopState();
   const loopActive = loop.enabled && duration > 0;
@@ -376,8 +431,8 @@ function updateLoopUi(duration = audio.getState().duration || 0) {
   }
 
   const range = clampLoopRange(loop.startTime, loop.endTime, duration);
-  const startPercent = (range.startTime / duration) * 100;
-  const endPercent = (range.endTime / duration) * 100;
+  const startPercent = getSeekPositionPercent(range.startTime, duration);
+  const endPercent = getSeekPositionPercent(range.endTime, duration);
 
   dom.loopRegion.style.left = `${startPercent}%`;
   dom.loopRegion.style.width = `${Math.max(0, endPercent - startPercent)}%`;
@@ -1185,13 +1240,18 @@ function getSeekTimeForClientX(clientX) {
     return 0;
   }
 
-  const rect = dom.seekSlider.getBoundingClientRect();
-  if (!(rect.width > 0)) {
+  const bounds = getSeekThumbTravelBounds();
+  if (!bounds) {
     return 0;
   }
 
-  const ratio = (clientX - rect.left) / rect.width;
-  const clampedRatio = Math.min(1, Math.max(0, ratio));
+  const travelWidth = bounds.maxX - bounds.minX;
+  if (!(travelWidth > 0)) {
+    return 0;
+  }
+
+  const clampedX = Math.min(bounds.maxX, Math.max(bounds.minX, clientX));
+  const clampedRatio = (clampedX - bounds.minX) / travelWidth;
   return clampedRatio * duration;
 }
 

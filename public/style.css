@@ -16,6 +16,8 @@
 
   --danger: #eb6f92;
   --success: #9ccfd8;
+
+  --seek-thumb-size: 12px;
   
   --radius-lg: 24px;
   --radius-md: 16px;
@@ -958,8 +960,8 @@ input[type=range]::-moz-range-track {
 
 /* Thumb */
 input[type=range]::-webkit-slider-thumb {
-  height: 12px;
-  width: 12px;
+  height: var(--seek-thumb-size);
+  width: var(--seek-thumb-size);
   border-radius: 50%;
   background: var(--accent);
   cursor: pointer;
@@ -975,8 +977,8 @@ input[type=range]:hover::-webkit-slider-thumb {
 }
 
 input[type=range]::-moz-range-thumb {
-  height: 12px;
-  width: 12px;
+  height: var(--seek-thumb-size);
+  width: var(--seek-thumb-size);
   border: none;
   border-radius: 50%;
   background: var(--accent);
