@@ -135,7 +135,6 @@ const dom = {
   prefTrackSelect: document.getElementById("track-select-preference"),
   preferenceStage: document.getElementById("preference-stage"),
   matchupText: document.getElementById("matchup-text"),
-  matchupMeta: document.getElementById("matchup-meta"),
   buttonA: document.getElementById("switch-a"),
   buttonB: document.getElementById("switch-b"),
   verdictRow: document.getElementById("verdict-row"),
@@ -510,6 +509,8 @@ function setPreferenceButtonsEnabled({ switchEnabled, verdictEnabled }) {
 
 function resetRevealUi() {
   state.isRevealed = false;
+  dom.matchupText.textContent = "";
+  dom.matchupText.classList.add("hidden");
   dom.matchupText.classList.remove("revealed-names");
   dom.revealBtn.classList.remove("hidden");
   dom.revealConfirm.classList.add("hidden");
@@ -547,6 +548,7 @@ function revealPresets() {
   const secondName = secondPreset?.name ?? pair.presetB;
 
   setRevealedMatchupText(firstName, secondName);
+  dom.matchupText.classList.remove("hidden");
   dom.verdictRow.classList.add("hidden");
   dom.revealedActions.classList.remove("hidden");
   dom.revealArea.classList.add("hidden");
@@ -569,9 +571,6 @@ function updatePreferenceUi() {
   };
 
   if (!pair) {
-    dom.matchupText.textContent = "Preference test complete";
-    dom.matchupText.classList.remove("revealed-names");
-    dom.matchupMeta.textContent = "";
     dom.prefProgress.textContent = progress.total > 0
       ? `Completed ${progress.total} of ${progress.total} matchups.`
       : "";
@@ -584,11 +583,6 @@ function updatePreferenceUi() {
 
   const matchupNumber = progress.done + 1;
 
-  if (!state.isRevealed) {
-    dom.matchupText.textContent = "A vs B";
-    dom.matchupText.classList.remove("revealed-names");
-  }
-  dom.matchupMeta.textContent = state.selectedTrack ? `Track: ${state.selectedTrack}` : "";
   dom.prefProgress.textContent = `Matchup ${matchupNumber} of ${progress.total} (${formatPhaseLabel(progress.phase)})`;
 
   setPreferenceButtonsEnabled({

@@ -8,7 +8,6 @@ const styleSource = readFileSync(join(import.meta.dir, "..", "public", "style.cs
 
 describe("blind UI regression checks", () => {
   test("preference screen keeps matchup labels blinded", () => {
-    expect(appSource).toContain('dom.matchupText.textContent = "A vs B";');
     expect(appSource).not.toContain("dom.matchupMeta.textContent = `A:");
   });
 
@@ -32,8 +31,7 @@ describe("blind UI regression checks", () => {
     expect(appSource).toContain("dom.revealArea.classList.add(\"hidden\");");
     expect(appSource).toContain("switchEnabled: !state.isAdvancingPreference,");
     expect(appSource).toContain("verdictEnabled: !state.isAdvancingPreference && !state.isRevealed,");
-    expect(appSource).toContain("if (!state.isRevealed) {");
-    expect(appSource).toContain('dom.matchupText.textContent = "A vs B";');
+    expect(appSource).toContain("if (!pair || state.isAdvancingPreference || state.isRevealed) {");
     expect(appSource).toContain("!state.isRevealed && key === \"z\"");
     expect(appSource).toContain("!state.isRevealed && key === \"x\"");
     expect(appSource).toContain("!state.isRevealed && key === \"c\"");
