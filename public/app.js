@@ -32,6 +32,17 @@ const RESET_SCORES_DEFAULT_TEXT = "Reset All Scores";
 const RESET_SCORES_CONFIRM_TEXT = "Confirm Reset?";
 const RESET_SCORES_DONE_TEXT = "Scores Cleared";
 const DIRECTORY_DETAILS_STORAGE_KEY = "abxEq.directoryDetailsOpen.v1";
+const MATRIX_NEUTRAL_WINRATE = 0.5;
+const MATRIX_EXTREME_DELTA = 0.2;
+const MATRIX_MIN_ALPHA = 0.08;
+const MATRIX_MAX_ALPHA = 0.2;
+const MATRIX_STRONG_SIGNIFICANCE_P = 0.05;
+const MATRIX_MIN_SIGNIFICANCE_SCALE = 0.2;
+const MATRIX_NEUTRAL_RGB = [224, 222, 244];
+const MATRIX_SUCCESS_RGB = [156, 207, 216];
+const MATRIX_DANGER_RGB = [235, 111, 146];
+const MATRIX_TEXT_MAX_MIX = 0.82;
+const MATRIX_TEXT_MIN_CONFIDENCE_SCALE = 0.62;
 
 const PLAY_ICON_SVG = `
   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -571,6 +582,92 @@ function updateAbxUi() {
   setActiveButton(dom.abxSwitchX, state.abxListeningTarget === "X");
 }
 
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getMatrixSignedStrength(winRate) {
+  if (!Number.isFinite(winRate)) {
+    return null;
+  }
+
+  const signedStrength = clampNumber(
+    (winRate - MATRIX_NEUTRAL_WINRATE) / MATRIX_EXTREME_DELTA,
+    -1,
+    1,
+  );
+
+  return {
+    signedStrength,
+    directionStrength: Math.abs(signedStrength),
+  };
+}
+
+function getMatrixSignificanceScale(pValue) {
+  const safePValue = Number.isFinite(pValue) ? clampNumber(pValue, 0, 1) : 1;
+  if (safePValue <= MATRIX_STRONG_SIGNIFICANCE_P) {
+    return 1;
+  }
+
+  return clampNumber(
+    1 - ((safePValue - MATRIX_STRONG_SIGNIFICANCE_P) / (1 - MATRIX_STRONG_SIGNIFICANCE_P))
+      * (1 - MATRIX_MIN_SIGNIFICANCE_SCALE),
+    MATRIX_MIN_SIGNIFICANCE_SCALE,
+    1,
+  );
+}
+
+function mixRgb(fromRgb, toRgb, amount) {
+  const mixAmount = clampNumber(amount, 0, 1);
+  return [
+    Math.round(fromRgb[0] + (toRgb[0] - fromRgb[0]) * mixAmount),
+    Math.round(fromRgb[1] + (toRgb[1] - fromRgb[1]) * mixAmount),
+    Math.round(fromRgb[2] + (toRgb[2] - fromRgb[2]) * mixAmount),
+  ];
+}
+
+function rgbToCss(rgb) {
+  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+}
+
+function getWinRateTextColor(winRate, pValue = MATRIX_STRONG_SIGNIFICANCE_P) {
+  const strength = getMatrixSignedStrength(winRate);
+  if (!strength) {
+    return "";
+  }
+
+  if (!(strength.directionStrength > 0)) {
+    return rgbToCss(MATRIX_NEUTRAL_RGB);
+  }
+
+  const significanceScale = getMatrixSignificanceScale(pValue);
+  const confidenceScale = MATRIX_TEXT_MIN_CONFIDENCE_SCALE
+    + (1 - MATRIX_TEXT_MIN_CONFIDENCE_SCALE) * significanceScale;
+  const emphasis = Math.pow(strength.directionStrength, 0.88)
+    * MATRIX_TEXT_MAX_MIX
+    * confidenceScale;
+  const accentRgb = strength.signedStrength >= 0 ? MATRIX_SUCCESS_RGB : MATRIX_DANGER_RGB;
+  return rgbToCss(mixRgb(MATRIX_NEUTRAL_RGB, accentRgb, emphasis));
+}
+
+function getMatrixCellTint(winRate, pValue) {
+  const strength = getMatrixSignedStrength(winRate);
+  if (!strength) {
+    return "";
+  }
+
+  if (!(strength.directionStrength > 0)) {
+    return "";
+  }
+
+  const significanceScale = getMatrixSignificanceScale(pValue);
+
+  const alphaBase = MATRIX_MIN_ALPHA + (MATRIX_MAX_ALPHA - MATRIX_MIN_ALPHA) * strength.directionStrength;
+  const alpha = alphaBase * significanceScale;
+  const rgb = strength.signedStrength >= 0 ? MATRIX_SUCCESS_RGB : MATRIX_DANGER_RGB;
+  return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha.toFixed(3)})`;
+}
+
 function renderResults() {
   const currentPresets = listCurrentPresets();
   const ids = new Set(currentPresets.map((preset) => preset.id));
@@ -637,6 +734,8 @@ function renderResults() {
   for (let i = 0; i < btStandings.length; i += 1) {
     const row = btStandings[i];
     const tr = document.createElement("tr");
+    const standingsWinRateColor = getWinRateTextColor(row.winRate);
+    const standingsWinRateStyle = standingsWinRateColor ? ` style="color: ${standingsWinRateColor}"` : "";
     if (i < 3) {
       tr.classList.add(`rank-${i + 1}`);
     }
@@ -648,7 +747,7 @@ function renderResults() {
       <td>${row.wins}</td>
       <td>${row.losses}</td>
       <td>${row.draws}</td>
-      <td>${formatPercent(row.winRate)}</td>
+      <td><span class="standings-winrate"${standingsWinRateStyle}>${formatPercent(row.winRate)}</span></td>
     `;
     dom.preferenceTableBody.appendChild(tr);
   }
@@ -657,9 +756,33 @@ function renderResults() {
   const matrixTable = document.createElement("table");
   matrixTable.className = "matrix";
 
-  const header = document.createElement("tr");
-  header.innerHTML = `<th>Preset</th>${currentPresets.map((preset) => `<th>${preset.name}</th>`).join("")}`;
-  matrixTable.appendChild(header);
+  const matrixHead = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+
+  const cornerHeader = document.createElement("th");
+  cornerHeader.scope = "col";
+  cornerHeader.className = "matrix-corner";
+  cornerHeader.textContent = "Preset";
+  headerRow.appendChild(cornerHeader);
+
+  for (const preset of currentPresets) {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.className = "matrix-col-header";
+    th.title = preset.name;
+
+    const label = document.createElement("span");
+    label.className = "matrix-header-label";
+    label.textContent = preset.name;
+    th.appendChild(label);
+
+    headerRow.appendChild(th);
+  }
+
+  matrixHead.appendChild(headerRow);
+  matrixTable.appendChild(matrixHead);
+
+  const matrixBody = document.createElement("tbody");
 
   let testedPairs = 0;
   let significantPairs = 0;
@@ -667,20 +790,36 @@ function renderResults() {
   for (let rowIndex = 0; rowIndex < currentPresets.length; rowIndex += 1) {
     const rowPreset = currentPresets[rowIndex];
     const tr = document.createElement("tr");
-    const cells = [];
+
+    const rowHeader = document.createElement("th");
+    rowHeader.scope = "row";
+    rowHeader.className = "matrix-row-header";
+    rowHeader.title = rowPreset.name;
+
+    const rowLabel = document.createElement("span");
+    rowLabel.className = "matrix-header-label";
+    rowLabel.textContent = rowPreset.name;
+    rowHeader.appendChild(rowLabel);
+    tr.appendChild(rowHeader);
 
     for (let colIndex = 0; colIndex < currentPresets.length; colIndex += 1) {
       const colPreset = currentPresets[colIndex];
+      const td = document.createElement("td");
+
       if (rowPreset.id === colPreset.id) {
-        cells.push("<td>-</td>");
+        td.classList.add("cell-empty", "cell-diagonal");
+        td.innerHTML = '<span class="cell-empty" aria-hidden="true">—</span>';
+        tr.appendChild(td);
         continue;
       }
 
       const cell = matrix.get(rowPreset.id).get(colPreset.id);
       const decisiveOutcomes = cell.wins + cell.losses;
+      const totalOutcomes = decisiveOutcomes + cell.draws;
       const hasDecisiveOutcomes = decisiveOutcomes > 0;
+      const hasOutcomes = totalOutcomes > 0;
       const pValue = hasDecisiveOutcomes ? pairPreferencePValue(cell) : 1;
-      const pText = hasDecisiveOutcomes ? pValue.toFixed(4) : "--";
+      const pText = hasDecisiveOutcomes ? `p=${pValue.toFixed(4)}` : "p=--";
       const significant = hasDecisiveOutcomes && isSignificant(pValue);
 
       if (colIndex > rowIndex && hasDecisiveOutcomes) {
@@ -690,17 +829,61 @@ function renderResults() {
         }
       }
 
-      cells.push(`
-        <td>
-          <span>${cell.wins}-${cell.losses}-${cell.draws}</span>
-          <span class="cell-meta${significant ? " cell-significant" : ""}">p=${pText}</span>
-        </td>
-      `);
+      if (!hasOutcomes) {
+        td.classList.add("cell-empty");
+        td.innerHTML = '<span class="cell-empty" aria-hidden="true">—</span>';
+        tr.appendChild(td);
+        continue;
+      }
+
+      const winRate = hasDecisiveOutcomes ? cell.wins / decisiveOutcomes : null;
+      const winRateText = Number.isFinite(winRate) ? `${Math.round(winRate * 100)}%` : "—";
+      const recordText = `${cell.wins}-${cell.losses}-${cell.draws}`;
+
+      const content = document.createElement("div");
+      content.className = "cell-content";
+
+      const winRateEl = document.createElement("div");
+      winRateEl.className = "cell-winrate";
+      if (!hasDecisiveOutcomes) {
+        winRateEl.classList.add("is-empty");
+      }
+      winRateEl.textContent = winRateText;
+      content.appendChild(winRateEl);
+
+      const recordEl = document.createElement("div");
+      recordEl.className = "cell-record";
+      recordEl.textContent = recordText;
+      content.appendChild(recordEl);
+
+      const pValueEl = document.createElement("div");
+      pValueEl.className = "cell-pvalue";
+      if (significant) {
+        pValueEl.classList.add("is-significant");
+      }
+      pValueEl.textContent = pText;
+      content.appendChild(pValueEl);
+
+      if (hasDecisiveOutcomes && Number.isFinite(winRate)) {
+        const matrixTint = getMatrixCellTint(winRate, pValue);
+        if (matrixTint) {
+          td.style.background = matrixTint;
+        }
+
+        const matrixWinRateColor = getWinRateTextColor(winRate, pValue);
+        if (matrixWinRateColor) {
+          winRateEl.style.color = matrixWinRateColor;
+        }
+      }
+
+      td.appendChild(content);
+      tr.appendChild(td);
     }
 
-    tr.innerHTML = `<th>${rowPreset.name}</th>${cells.join("")}`;
-    matrixTable.appendChild(tr);
+    matrixBody.appendChild(tr);
   }
+
+  matrixTable.appendChild(matrixBody);
 
   dom.headToHeadWrap.innerHTML = "";
   dom.headToHeadWrap.appendChild(matrixTable);

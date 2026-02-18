@@ -109,4 +109,30 @@ describe("blind UI regression checks", () => {
     expect(appSource).toContain("setTimeout(() => {");
     expect(appSource).not.toContain("window.confirm(");
   });
+
+  test("head-to-head matrix cells prioritize winrate with layered metadata", () => {
+    expect(appSource).toContain("const winRate = hasDecisiveOutcomes ? cell.wins / decisiveOutcomes : null;");
+    expect(appSource).toContain("const winRateText = Number.isFinite(winRate) ? `${Math.round(winRate * 100)}%` : \"—\";");
+    expect(appSource).toContain("content.className = \"cell-content\";");
+    expect(appSource).toContain("winRateEl.className = \"cell-winrate\";");
+    expect(appSource).toContain("recordEl.className = \"cell-record\";");
+    expect(appSource).toContain("pValueEl.className = \"cell-pvalue\";");
+    expect(appSource).toContain("const matrixWinRateColor = getWinRateTextColor(winRate, pValue);");
+    expect(appSource).toContain("winRateEl.style.color = matrixWinRateColor;");
+    expect(appSource).toContain("td.style.background = matrixTint;");
+  });
+
+  test("standings win rate uses the same value-based color cue", () => {
+    expect(appSource).toContain("const standingsWinRateColor = getWinRateTextColor(row.winRate);");
+    expect(appSource).toContain('<span class="standings-winrate"');
+    expect(styleSource).toContain(".standings-winrate");
+  });
+
+  test("head-to-head matrix uses dedicated rose pine table styling", () => {
+    expect(styleSource).toContain(".matrix .cell-winrate");
+    expect(styleSource).toContain(".matrix .cell-record");
+    expect(styleSource).toContain(".matrix .cell-pvalue");
+    expect(styleSource).toContain(".matrix td.cell-empty");
+    expect(styleSource).toContain(".matrix .matrix-header-label");
+  });
 });

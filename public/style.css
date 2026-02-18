@@ -1077,18 +1077,162 @@ tbody tr:hover {
   box-shadow: inset 0 0 0 1px rgba(224, 222, 244, 0.07);
 }
 
+.standings-winrate {
+  color: var(--text-main);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
 .matrix-wrap {
   overflow-x: auto;
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  padding: 1rem;
+  border-radius: var(--radius-md);
+  background: linear-gradient(165deg, rgba(38, 35, 58, 0.95), rgba(31, 29, 46, 0.92));
+  padding: 0.9rem;
   border: 1px solid var(--border-subtle);
 }
 
-.matrix th, .matrix td {
+.matrix {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border-collapse: separate;
+  border-spacing: 0.42rem;
+  table-layout: fixed;
+}
+
+.matrix th,
+.matrix td {
   text-align: center;
-  padding: 0.75rem;
-  min-width: 60px;
+  padding: 0;
+  border-bottom: none;
+}
+
+.matrix tbody tr:hover {
+  background: transparent;
+}
+
+.matrix th {
+  background: transparent;
+}
+
+.matrix .matrix-corner,
+.matrix .matrix-row-header {
+  text-align: left;
+  min-width: 132px;
+  max-width: 156px;
+}
+
+.matrix .matrix-corner {
+  padding: 0.35rem 0.45rem;
+  font-size: 0.74rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.matrix .matrix-col-header {
+  min-width: 94px;
+  max-width: 132px;
+  padding: 0.25rem 0.3rem;
+  font-size: 0.74rem;
+}
+
+.matrix .matrix-row-header {
+  border-radius: 12px;
+  padding: 0.52rem 0.62rem;
+  background: rgba(25, 23, 36, 0.42);
+  border: 1px solid rgba(110, 106, 134, 0.28);
+}
+
+.matrix .matrix-header-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.matrix td {
+  min-width: 94px;
+  height: 84px;
+  border-radius: 12px;
+  border: 1px solid rgba(110, 106, 134, 0.22);
+  background: var(--bg-elevated);
+  vertical-align: middle;
+  transition: background-color 0.22s ease, border-color 0.22s ease, transform 0.22s ease;
+}
+
+.matrix td:hover {
+  border-color: rgba(156, 207, 216, 0.42);
+  transform: translateY(-1px);
+}
+
+.matrix .cell-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.16rem;
+  height: 100%;
+  padding: 0.46rem 0.3rem;
+}
+
+.matrix .cell-winrate {
+  font-size: 1.05rem;
+  font-weight: 620;
+  line-height: 1;
+  color: var(--text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.matrix .cell-winrate.is-empty {
+  color: var(--text-muted);
+}
+
+.matrix .cell-record {
+  font-size: 0.68rem;
+  color: #a59dbf;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.matrix .cell-pvalue {
+  font-size: 0.62rem;
+  color: #7f7a95;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.58;
+  transition: opacity 0.2s ease, color 0.2s ease;
+}
+
+.matrix td:hover .cell-pvalue {
+  opacity: 0.82;
+}
+
+.matrix .cell-pvalue.is-significant {
+  color: #b3a0d4;
+  opacity: 0.86;
+}
+
+.matrix td.cell-empty,
+.matrix td.cell-diagonal {
+  background: rgba(25, 23, 36, 0.58);
+  border-color: rgba(110, 106, 134, 0.26);
+}
+
+.matrix td.cell-diagonal {
+  box-shadow: inset 0 0 0 1px rgba(110, 106, 134, 0.18);
+}
+
+.matrix span.cell-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  opacity: 0.65;
+  font-weight: 500;
 }
 
 .results-subsection {
@@ -1220,5 +1364,42 @@ tbody tr:hover {
 
   .volume-container {
     margin-left: auto;
+  }
+
+  .matrix-wrap {
+    padding: 0.64rem;
+  }
+
+  .matrix {
+    border-spacing: 0.32rem;
+  }
+
+  .matrix .matrix-corner,
+  .matrix .matrix-row-header {
+    min-width: 102px;
+    max-width: 118px;
+    font-size: 0.68rem;
+  }
+
+  .matrix .matrix-col-header,
+  .matrix td {
+    min-width: 76px;
+    max-width: 92px;
+  }
+
+  .matrix td {
+    height: 70px;
+  }
+
+  .matrix .cell-winrate {
+    font-size: 0.92rem;
+  }
+
+  .matrix .cell-record {
+    font-size: 0.63rem;
+  }
+
+  .matrix .cell-pvalue {
+    font-size: 0.58rem;
   }
 }
