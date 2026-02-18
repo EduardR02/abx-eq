@@ -351,13 +351,13 @@ async function listPresets(): Promise<ParsedPreset[]> {
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
 
-  const presets: ParsedPreset[] = [];
-
-  for (const filename of files) {
-    const file = Bun.file(path.join(presetsDirPath, filename));
-    const text = await file.text();
-    presets.push(parsePresetContent(text, filename));
-  }
+  const presets = await Promise.all(
+    files.map(async (filename) => {
+      const file = Bun.file(path.join(presetsDirPath, filename));
+      const text = await file.text();
+      return parsePresetContent(text, filename);
+    }),
+  );
 
   return presets;
 }

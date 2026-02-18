@@ -110,7 +110,7 @@ function getBs1770ChannelWeight(channelIndex, channelCount) {
   return 1;
 }
 
-function measureKWeightedLufs(audioBuffer) {
+function measureGatedLoudness(audioBuffer, filterStages) {
   const sampleRate = audioBuffer.sampleRate;
   const frames = audioBuffer.length;
   const channelCount = audioBuffer.numberOfChannels;
@@ -118,37 +118,26 @@ function measureKWeightedLufs(audioBuffer) {
     return -Infinity;
   }
 
-  const stageOne = designBiquad({
-    type: "highshelf",
-    frequency: 1500,
-    gainDb: 4,
-    q: 0.70710678,
-    sampleRate,
-  });
-  const stageTwo = designBiquad({
-    type: "highpass",
-    frequency: 38,
-    q: 0.5,
-    sampleRate,
-  });
-
+  const stageCount = filterStages.length;
   const blockSize = Math.max(1, Math.floor(0.4 * sampleRate));
   const hopSize = Math.max(1, Math.floor(0.1 * sampleRate));
   const absoluteGateEnergy = 10 ** ((-70 + 0.691) / 10);
 
   const channelData = new Array(channelCount);
   const channelWeights = new Array(channelCount);
-  const states = new Array(channelCount);
+  const states = stageCount ? new Array(channelCount) : null;
 
   for (let channel = 0; channel < channelCount; channel += 1) {
     channelData[channel] = audioBuffer.getChannelData(channel);
     channelWeights[channel] = getBs1770ChannelWeight(channel, channelCount);
-    states[channel] = {
-      s1z1: 0,
-      s1z2: 0,
-      s2z1: 0,
-      s2z2: 0,
-    };
+
+    if (stageCount) {
+      const channelStates = new Array(stageCount);
+      for (let stageIndex = 0; stageIndex < stageCount; stageIndex += 1) {
+        channelStates[stageIndex] = { z1: 0, z2: 0 };
+      }
+      states[channel] = channelStates;
+    }
   }
 
   const windowEnergies = new Float64Array(blockSize);
@@ -168,17 +157,21 @@ function measureKWeightedLufs(audioBuffer) {
         continue;
       }
 
-      const x = channelData[channel][i];
-      const state = states[channel];
-      const y1 = stageOne.b0 * x + state.s1z1;
-      state.s1z1 = stageOne.b1 * x - stageOne.a1 * y1 + state.s1z2;
-      state.s1z2 = stageOne.b2 * x - stageOne.a2 * y1;
+      let y = channelData[channel][i];
 
-      const y2 = stageTwo.b0 * y1 + state.s2z1;
-      state.s2z1 = stageTwo.b1 * y1 - stageTwo.a1 * y2 + state.s2z2;
-      state.s2z2 = stageTwo.b2 * y1 - stageTwo.a2 * y2;
+      if (stageCount) {
+        const channelStates = states[channel];
+        for (let stageIndex = 0; stageIndex < stageCount; stageIndex += 1) {
+          const coeffs = filterStages[stageIndex];
+          const state = channelStates[stageIndex];
+          const x = y;
+          y = coeffs.b0 * x + state.z1;
+          state.z1 = coeffs.b1 * x - coeffs.a1 * y + state.z2;
+          state.z2 = coeffs.b2 * x - coeffs.a2 * y;
+        }
+      }
 
-      frameWeightedEnergy += weight * y2 * y2;
+      frameWeightedEnergy += weight * y * y;
     }
 
     totalWeightedEnergy += frameWeightedEnergy;
@@ -248,379 +241,69 @@ function measureKWeightedLufs(audioBuffer) {
   return -0.691 + 10 * Math.log10(integratedEnergy);
 }
 
-function measureFlatRms(audioBuffer) {
+function measureKWeightedLufs(audioBuffer) {
   const sampleRate = audioBuffer.sampleRate;
-  const frames = audioBuffer.length;
-  const channelCount = audioBuffer.numberOfChannels;
-  if (!frames || !channelCount) {
-    return -Infinity;
-  }
+  const filterStages = [
+    designBiquad({
+      type: "highshelf",
+      frequency: 1500,
+      gainDb: 4,
+      q: 0.70710678,
+      sampleRate,
+    }),
+    designBiquad({
+      type: "highpass",
+      frequency: 38,
+      q: 0.5,
+      sampleRate,
+    }),
+  ];
 
-  const blockSize = Math.max(1, Math.floor(0.4 * sampleRate));
-  const hopSize = Math.max(1, Math.floor(0.1 * sampleRate));
-  const absoluteGateEnergy = 10 ** ((-70 + 0.691) / 10);
+  return measureGatedLoudness(audioBuffer, filterStages);
+}
 
-  const channelData = new Array(channelCount);
-  const channelWeights = new Array(channelCount);
-
-  for (let channel = 0; channel < channelCount; channel += 1) {
-    channelData[channel] = audioBuffer.getChannelData(channel);
-    channelWeights[channel] = getBs1770ChannelWeight(channel, channelCount);
-  }
-
-  const windowEnergies = new Float64Array(blockSize);
-  let queueIndex = 0;
-  let queueFill = 0;
-  let runningWindowEnergy = 0;
-  let totalWeightedEnergy = 0;
-  const blockEnergies = [];
-  let nextBlockStart = 0;
-
-  for (let i = 0; i < frames; i += 1) {
-    let frameWeightedEnergy = 0;
-
-    for (let channel = 0; channel < channelCount; channel += 1) {
-      const weight = channelWeights[channel];
-      if (weight === 0) {
-        continue;
-      }
-
-      const x = channelData[channel][i];
-      frameWeightedEnergy += weight * x * x;
-    }
-
-    totalWeightedEnergy += frameWeightedEnergy;
-
-    if (queueFill < blockSize) {
-      windowEnergies[queueIndex] = frameWeightedEnergy;
-      runningWindowEnergy += frameWeightedEnergy;
-      queueFill += 1;
-      queueIndex = (queueIndex + 1) % blockSize;
-    } else {
-      const evictedEnergy = windowEnergies[queueIndex];
-      windowEnergies[queueIndex] = frameWeightedEnergy;
-      runningWindowEnergy += frameWeightedEnergy - evictedEnergy;
-      queueIndex = (queueIndex + 1) % blockSize;
-    }
-
-    if (queueFill === blockSize) {
-      const blockStart = i - blockSize + 1;
-      if (blockStart === nextBlockStart) {
-        blockEnergies.push(runningWindowEnergy / blockSize);
-        nextBlockStart += hopSize;
-      }
-    }
-  }
-
-  if (blockEnergies.length === 0) {
-    blockEnergies.push(totalWeightedEnergy / frames);
-  }
-
-  const absoluteGatedEnergies = [];
-  let absoluteGatedEnergySum = 0;
-  for (const blockEnergy of blockEnergies) {
-    if (blockEnergy >= absoluteGateEnergy) {
-      absoluteGatedEnergies.push(blockEnergy);
-      absoluteGatedEnergySum += blockEnergy;
-    }
-  }
-
-  if (absoluteGatedEnergies.length === 0) {
-    return -Infinity;
-  }
-
-  const absoluteGatedMeanEnergy = absoluteGatedEnergySum / absoluteGatedEnergies.length;
-  const relativeGateEnergy = absoluteGatedMeanEnergy / 10;
-
-  let integratedEnergySum = 0;
-  let integratedCount = 0;
-  for (const blockEnergy of absoluteGatedEnergies) {
-    if (blockEnergy >= relativeGateEnergy) {
-      integratedEnergySum += blockEnergy;
-      integratedCount += 1;
-    }
-  }
-
-  if (!integratedCount) {
-    return -Infinity;
-  }
-
-  const integratedEnergy = integratedEnergySum / integratedCount;
-  if (!(integratedEnergy > 0)) {
-    return -Infinity;
-  }
-
-  return -0.691 + 10 * Math.log10(integratedEnergy);
+function measureFlatRms(audioBuffer) {
+  return measureGatedLoudness(audioBuffer, []);
 }
 
 function measureBandpassRms(audioBuffer) {
   const sampleRate = audioBuffer.sampleRate;
-  const frames = audioBuffer.length;
-  const channelCount = audioBuffer.numberOfChannels;
-  if (!frames || !channelCount) {
-    return -Infinity;
-  }
+  const filterStages = [
+    designBiquad({
+      type: "highpass",
+      frequency: 2000,
+      q: 0.7071,
+      sampleRate,
+    }),
+    designBiquad({
+      type: "lowpass",
+      frequency: 10000,
+      q: 0.7071,
+      sampleRate,
+    }),
+  ];
 
-  const highpass = designBiquad({
-    type: "highpass",
-    frequency: 2000,
-    q: 0.7071,
-    sampleRate,
-  });
-  const lowpass = designBiquad({
-    type: "lowpass",
-    frequency: 10000,
-    q: 0.7071,
-    sampleRate,
-  });
-
-  const blockSize = Math.max(1, Math.floor(0.4 * sampleRate));
-  const hopSize = Math.max(1, Math.floor(0.1 * sampleRate));
-  const absoluteGateEnergy = 10 ** ((-70 + 0.691) / 10);
-
-  const channelData = new Array(channelCount);
-  const channelWeights = new Array(channelCount);
-  const states = new Array(channelCount);
-
-  for (let channel = 0; channel < channelCount; channel += 1) {
-    channelData[channel] = audioBuffer.getChannelData(channel);
-    channelWeights[channel] = getBs1770ChannelWeight(channel, channelCount);
-    states[channel] = {
-      hpZ1: 0,
-      hpZ2: 0,
-      lpZ1: 0,
-      lpZ2: 0,
-    };
-  }
-
-  const windowEnergies = new Float64Array(blockSize);
-  let queueIndex = 0;
-  let queueFill = 0;
-  let runningWindowEnergy = 0;
-  let totalWeightedEnergy = 0;
-  const blockEnergies = [];
-  let nextBlockStart = 0;
-
-  for (let i = 0; i < frames; i += 1) {
-    let frameWeightedEnergy = 0;
-
-    for (let channel = 0; channel < channelCount; channel += 1) {
-      const weight = channelWeights[channel];
-      if (weight === 0) {
-        continue;
-      }
-
-      const x = channelData[channel][i];
-      const state = states[channel];
-
-      const y1 = highpass.b0 * x + state.hpZ1;
-      state.hpZ1 = highpass.b1 * x - highpass.a1 * y1 + state.hpZ2;
-      state.hpZ2 = highpass.b2 * x - highpass.a2 * y1;
-
-      const y2 = lowpass.b0 * y1 + state.lpZ1;
-      state.lpZ1 = lowpass.b1 * y1 - lowpass.a1 * y2 + state.lpZ2;
-      state.lpZ2 = lowpass.b2 * y1 - lowpass.a2 * y2;
-
-      frameWeightedEnergy += weight * y2 * y2;
-    }
-
-    totalWeightedEnergy += frameWeightedEnergy;
-
-    if (queueFill < blockSize) {
-      windowEnergies[queueIndex] = frameWeightedEnergy;
-      runningWindowEnergy += frameWeightedEnergy;
-      queueFill += 1;
-      queueIndex = (queueIndex + 1) % blockSize;
-    } else {
-      const evictedEnergy = windowEnergies[queueIndex];
-      windowEnergies[queueIndex] = frameWeightedEnergy;
-      runningWindowEnergy += frameWeightedEnergy - evictedEnergy;
-      queueIndex = (queueIndex + 1) % blockSize;
-    }
-
-    if (queueFill === blockSize) {
-      const blockStart = i - blockSize + 1;
-      if (blockStart === nextBlockStart) {
-        blockEnergies.push(runningWindowEnergy / blockSize);
-        nextBlockStart += hopSize;
-      }
-    }
-  }
-
-  if (blockEnergies.length === 0) {
-    blockEnergies.push(totalWeightedEnergy / frames);
-  }
-
-  const absoluteGatedEnergies = [];
-  let absoluteGatedEnergySum = 0;
-  for (const blockEnergy of blockEnergies) {
-    if (blockEnergy >= absoluteGateEnergy) {
-      absoluteGatedEnergies.push(blockEnergy);
-      absoluteGatedEnergySum += blockEnergy;
-    }
-  }
-
-  if (absoluteGatedEnergies.length === 0) {
-    return -Infinity;
-  }
-
-  const absoluteGatedMeanEnergy = absoluteGatedEnergySum / absoluteGatedEnergies.length;
-  const relativeGateEnergy = absoluteGatedMeanEnergy / 10;
-
-  let integratedEnergySum = 0;
-  let integratedCount = 0;
-  for (const blockEnergy of absoluteGatedEnergies) {
-    if (blockEnergy >= relativeGateEnergy) {
-      integratedEnergySum += blockEnergy;
-      integratedCount += 1;
-    }
-  }
-
-  if (!integratedCount) {
-    return -Infinity;
-  }
-
-  const integratedEnergy = integratedEnergySum / integratedCount;
-  if (!(integratedEnergy > 0)) {
-    return -Infinity;
-  }
-
-  return -0.691 + 10 * Math.log10(integratedEnergy);
+  return measureGatedLoudness(audioBuffer, filterStages);
 }
 
 function measureEarSensitivityRms(audioBuffer) {
   const sampleRate = audioBuffer.sampleRate;
-  const frames = audioBuffer.length;
-  const channelCount = audioBuffer.numberOfChannels;
-  if (!frames || !channelCount) {
-    return -Infinity;
-  }
+  const filterStages = [
+    designBiquad({
+      type: "highpass",
+      frequency: 1000,
+      q: 0.7071,
+      sampleRate,
+    }),
+    designBiquad({
+      type: "lowpass",
+      frequency: 4000,
+      q: 0.7071,
+      sampleRate,
+    }),
+  ];
 
-  const highpass = designBiquad({
-    type: "highpass",
-    frequency: 1000,
-    q: 0.7071,
-    sampleRate,
-  });
-  const lowpass = designBiquad({
-    type: "lowpass",
-    frequency: 4000,
-    q: 0.7071,
-    sampleRate,
-  });
-
-  const blockSize = Math.max(1, Math.floor(0.4 * sampleRate));
-  const hopSize = Math.max(1, Math.floor(0.1 * sampleRate));
-  const absoluteGateEnergy = 10 ** ((-70 + 0.691) / 10);
-
-  const channelData = new Array(channelCount);
-  const channelWeights = new Array(channelCount);
-  const states = new Array(channelCount);
-
-  for (let channel = 0; channel < channelCount; channel += 1) {
-    channelData[channel] = audioBuffer.getChannelData(channel);
-    channelWeights[channel] = getBs1770ChannelWeight(channel, channelCount);
-    states[channel] = {
-      hpZ1: 0,
-      hpZ2: 0,
-      lpZ1: 0,
-      lpZ2: 0,
-    };
-  }
-
-  const windowEnergies = new Float64Array(blockSize);
-  let queueIndex = 0;
-  let queueFill = 0;
-  let runningWindowEnergy = 0;
-  let totalWeightedEnergy = 0;
-  const blockEnergies = [];
-  let nextBlockStart = 0;
-
-  for (let i = 0; i < frames; i += 1) {
-    let frameWeightedEnergy = 0;
-
-    for (let channel = 0; channel < channelCount; channel += 1) {
-      const weight = channelWeights[channel];
-      if (weight === 0) {
-        continue;
-      }
-
-      const x = channelData[channel][i];
-      const state = states[channel];
-
-      const y1 = highpass.b0 * x + state.hpZ1;
-      state.hpZ1 = highpass.b1 * x - highpass.a1 * y1 + state.hpZ2;
-      state.hpZ2 = highpass.b2 * x - highpass.a2 * y1;
-
-      const y2 = lowpass.b0 * y1 + state.lpZ1;
-      state.lpZ1 = lowpass.b1 * y1 - lowpass.a1 * y2 + state.lpZ2;
-      state.lpZ2 = lowpass.b2 * y1 - lowpass.a2 * y2;
-
-      frameWeightedEnergy += weight * y2 * y2;
-    }
-
-    totalWeightedEnergy += frameWeightedEnergy;
-
-    if (queueFill < blockSize) {
-      windowEnergies[queueIndex] = frameWeightedEnergy;
-      runningWindowEnergy += frameWeightedEnergy;
-      queueFill += 1;
-      queueIndex = (queueIndex + 1) % blockSize;
-    } else {
-      const evictedEnergy = windowEnergies[queueIndex];
-      windowEnergies[queueIndex] = frameWeightedEnergy;
-      runningWindowEnergy += frameWeightedEnergy - evictedEnergy;
-      queueIndex = (queueIndex + 1) % blockSize;
-    }
-
-    if (queueFill === blockSize) {
-      const blockStart = i - blockSize + 1;
-      if (blockStart === nextBlockStart) {
-        blockEnergies.push(runningWindowEnergy / blockSize);
-        nextBlockStart += hopSize;
-      }
-    }
-  }
-
-  if (blockEnergies.length === 0) {
-    blockEnergies.push(totalWeightedEnergy / frames);
-  }
-
-  const absoluteGatedEnergies = [];
-  let absoluteGatedEnergySum = 0;
-  for (const blockEnergy of blockEnergies) {
-    if (blockEnergy >= absoluteGateEnergy) {
-      absoluteGatedEnergies.push(blockEnergy);
-      absoluteGatedEnergySum += blockEnergy;
-    }
-  }
-
-  if (absoluteGatedEnergies.length === 0) {
-    return -Infinity;
-  }
-
-  const absoluteGatedMeanEnergy = absoluteGatedEnergySum / absoluteGatedEnergies.length;
-  const relativeGateEnergy = absoluteGatedMeanEnergy / 10;
-
-  let integratedEnergySum = 0;
-  let integratedCount = 0;
-  for (const blockEnergy of absoluteGatedEnergies) {
-    if (blockEnergy >= relativeGateEnergy) {
-      integratedEnergySum += blockEnergy;
-      integratedCount += 1;
-    }
-  }
-
-  if (!integratedCount) {
-    return -Infinity;
-  }
-
-  const integratedEnergy = integratedEnergySum / integratedCount;
-  if (!(integratedEnergy > 0)) {
-    return -Infinity;
-  }
-
-  return -0.691 + 10 * Math.log10(integratedEnergy);
+  return measureGatedLoudness(audioBuffer, filterStages);
 }
 
 /**
@@ -836,7 +519,7 @@ export class AudioEngine extends EventTarget {
     const encoded = await response.arrayBuffer();
     onProgress?.({ done: 1, total: totalSteps, message: "Decoding track..." });
 
-    const sourceBuffer = await context.decodeAudioData(encoded.slice(0));
+    const sourceBuffer = await context.decodeAudioData(encoded);
     onProgress?.({ done: 2, total: totalSteps, message: "Rendering presets..." });
 
     const measureLoudness = normalizationMode === "earsens" ? measureEarSensitivityRms

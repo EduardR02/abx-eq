@@ -19,7 +19,7 @@ import {
 const STORAGE_KEY = "abxEqState.v1";
 const NO_EQ_ID = "__no_eq__";
 const TRANSITION_MS = 150;
-const ROUND_COMPLETE_MS = 2000;
+const ROUND_COMPLETE_MS = 600;
 const TOAST_MS = 1500;
 const LOOP_DEFAULT_SECONDS = 10;
 const LOOP_MIN_SECONDS = 1;
@@ -207,8 +207,18 @@ function isPreferenceScreenActive() {
   return state.mode === "preference" && !dom.preferenceScreen.classList.contains("hidden");
 }
 
+let saveStoreTimer = null;
+let playbackRafId = null;
+
 function saveStore() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.store));
+  if (saveStoreTimer) {
+    clearTimeout(saveStoreTimer);
+  }
+
+  saveStoreTimer = setTimeout(() => {
+    saveStoreTimer = null;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.store));
+  }, 300);
 }
 
 function loadStore() {
@@ -726,7 +736,7 @@ function renderResults() {
   const eloStandings = buildStandings(currentPresets, relevantPreference, 32);
   const eloById = new Map(eloStandings.map((row) => [row.id, row.rating]));
   const btStandings = buildBradleyTerryStandings(currentPresets, relevantPreference, {
-    confidenceSamples: 60,
+    confidenceSamples: 0,
     fitOptions: { maxIterations: 70 },
   });
 
@@ -2006,6 +2016,9 @@ function attachEvents() {
 
   audio.addEventListener("state", () => {
     updatePlaybackUi();
+    if (audio.isPlaying && playbackRafId === null) {
+      startRenderLoop();
+    }
     if (state.mode === "preference") {
       updatePreferenceUi();
     }
@@ -2018,11 +2031,20 @@ function attachEvents() {
 }
 
 function startRenderLoop() {
+  if (playbackRafId !== null) {
+    return;
+  }
+
   function frame() {
     updatePlaybackUi();
-    requestAnimationFrame(frame);
+    if (!audio.isPlaying) {
+      playbackRafId = null;
+      return;
+    }
+    playbackRafId = requestAnimationFrame(frame);
   }
-  requestAnimationFrame(frame);
+
+  playbackRafId = requestAnimationFrame(frame);
 }
 
 async function init() {
@@ -2044,7 +2066,6 @@ async function init() {
     setSetupError(error instanceof Error ? error.message : String(error));
   }
 
-  startRenderLoop();
 }
 
 init();
