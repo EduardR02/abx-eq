@@ -373,6 +373,13 @@ button.play-main.is-playing {
   letter-spacing: 0.05em;
 }
 
+.drop-zone-note {
+  margin: 0.75rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
 .local-file-list {
   margin-top: 0.85rem;
   display: grid;
