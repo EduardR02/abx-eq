@@ -499,6 +499,66 @@ input[type="text"]:focus {
   padding: 1rem;
 }
 
+.reset-scores {
+  align-self: flex-start;
+  padding: 0.42rem 0.78rem;
+  border-radius: 999px;
+  border-color: rgba(235, 111, 146, 0.32);
+  background: transparent;
+  color: var(--danger);
+  font-size: 0.76rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  transition:
+    background-color 0.22s ease,
+    color 0.22s ease,
+    border-color 0.22s ease,
+    box-shadow 0.22s ease,
+    transform 0.22s ease,
+    opacity 0.22s ease;
+}
+
+.reset-scores:hover:not(:disabled) {
+  background: rgba(235, 111, 146, 0.1);
+  border-color: rgba(235, 111, 146, 0.56);
+  color: #f6d5df;
+}
+
+.reset-scores.is-confirming {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff4f7;
+  box-shadow: 0 9px 22px rgba(235, 111, 146, 0.34);
+  animation: resetScoresPulse 0.8s ease-in-out;
+}
+
+.reset-scores.is-confirming:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #fff7f9;
+}
+
+.reset-scores.is-done {
+  background: var(--success);
+  border-color: var(--success);
+  color: #191724;
+  box-shadow: 0 8px 20px rgba(156, 207, 216, 0.33);
+}
+
+@keyframes resetScoresPulse {
+  0% {
+    transform: scale(1);
+  }
+
+  45% {
+    transform: scale(1.03);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
 #start-preference {
   position: relative;
   overflow: hidden;

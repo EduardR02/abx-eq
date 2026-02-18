@@ -24,6 +24,11 @@ const TOAST_MS = 1500;
 const LOOP_DEFAULT_SECONDS = 10;
 const LOOP_MIN_SECONDS = 1;
 const PLAYBACK_HIDE_MS = 420;
+const RESET_CONFIRM_MS = 3000;
+const RESET_DONE_MS = 1500;
+const RESET_SCORES_DEFAULT_TEXT = "Reset All Scores";
+const RESET_SCORES_CONFIRM_TEXT = "Confirm Reset?";
+const RESET_SCORES_DONE_TEXT = "Scores Cleared";
 const DIRECTORY_DETAILS_STORAGE_KEY = "abxEq.directoryDetailsOpen.v1";
 
 const PLAY_ICON_SVG = `
@@ -109,6 +114,7 @@ const dom = {
   roundsSummary: document.getElementById("rounds-summary"),
   startPreferenceBtn: document.getElementById("start-preference"),
   startAbxBtn: document.getElementById("start-abx"),
+  resetScores: document.getElementById("reset-scores"),
 
   loadingText: document.getElementById("loading-text"),
   loadingBar: document.getElementById("loading-bar"),
@@ -1513,6 +1519,58 @@ function restoreDirectoryPanelState() {
   }
 }
 
+let resetConfirmTimeout = null;
+let resetDoneTimeout = null;
+
+function resetScoresButtonToDefault() {
+  dom.resetScores.classList.remove("is-confirming", "is-done");
+  dom.resetScores.textContent = RESET_SCORES_DEFAULT_TEXT;
+}
+
+function enterResetConfirmState() {
+  if (resetDoneTimeout) {
+    clearTimeout(resetDoneTimeout);
+    resetDoneTimeout = null;
+  }
+
+  dom.resetScores.classList.remove("is-done");
+  dom.resetScores.classList.add("is-confirming");
+  dom.resetScores.textContent = RESET_SCORES_CONFIRM_TEXT;
+
+  if (resetConfirmTimeout) {
+    clearTimeout(resetConfirmTimeout);
+  }
+
+  resetConfirmTimeout = setTimeout(() => {
+    resetConfirmTimeout = null;
+    resetScoresButtonToDefault();
+  }, RESET_CONFIRM_MS);
+}
+
+function clearAllScores() {
+  if (resetConfirmTimeout) {
+    clearTimeout(resetConfirmTimeout);
+    resetConfirmTimeout = null;
+  }
+
+  if (resetDoneTimeout) {
+    clearTimeout(resetDoneTimeout);
+  }
+
+  state.store.preferenceMatches = [];
+  state.store.abxRuns = [];
+  saveStore();
+
+  dom.resetScores.classList.remove("is-confirming");
+  dom.resetScores.classList.add("is-done");
+  dom.resetScores.textContent = RESET_SCORES_DONE_TEXT;
+
+  resetDoneTimeout = setTimeout(() => {
+    resetDoneTimeout = null;
+    resetScoresButtonToDefault();
+  }, RESET_DONE_MS);
+}
+
 function attachEvents() {
   dom.applyDirectoriesBtn.addEventListener("click", () => {
     applyDirectoryConfig();
@@ -1551,6 +1609,19 @@ function attachEvents() {
       setSetupError(error instanceof Error ? error.message : String(error));
       showScreen("setup");
     }
+  });
+
+  dom.resetScores.addEventListener("click", () => {
+    if (dom.resetScores.classList.contains("is-confirming")) {
+      clearAllScores();
+      return;
+    }
+
+    if (dom.resetScores.classList.contains("is-done")) {
+      return;
+    }
+
+    enterResetConfirmState();
   });
 
   dom.roundsQuickBtn.addEventListener("click", () => {

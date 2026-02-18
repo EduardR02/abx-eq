@@ -31,11 +31,11 @@ describe("blind UI regression checks", () => {
   });
 
   test("background gradients stay seamless during scrolling", () => {
-    expect(styleSource).toContain("radial-gradient(ellipse at 12% 10%");
-    expect(styleSource).toContain("radial-gradient(ellipse at 88% 0%");
-    expect(styleSource).toContain("rgba(196, 167, 231, 0.06)");
-    expect(styleSource).toContain("rgba(235, 111, 146, 0.055)");
-    expect(styleSource).toContain("background-size: 220vmax 220vmax, 220vmax 220vmax;");
+    expect(styleSource).toContain("radial-gradient(circle at 12% 10%");
+    expect(styleSource).toContain("radial-gradient(circle at 88% 0%");
+    expect(styleSource).toContain("rgba(196, 167, 231, 0.14)");
+    expect(styleSource).toContain("rgba(235, 111, 146, 0.12)");
+    expect(styleSource).toContain("background-attachment: fixed;");
     expect(styleSource).toContain("background-color: transparent;");
   });
 
@@ -73,5 +73,28 @@ describe("blind UI regression checks", () => {
     expect(htmlSource).toContain('id="play-pause" class="icon-btn play-main"');
     expect(htmlSource).toContain("<svg viewBox=\"0 0 24 24\"");
     expect(appSource).toContain("dom.playPauseBtn.innerHTML = playback.isPlaying ? PAUSE_ICON_SVG : PLAY_ICON_SVG;");
+  });
+
+  test("setup screen includes an inline reset scores action", () => {
+    const setupActions = '<div class="actions stacked">';
+    const resetButton = '<button id="reset-scores" class="reset-scores" type="button">Reset All Scores</button>';
+
+    expect(htmlSource).toContain(setupActions);
+    expect(htmlSource).toContain(resetButton);
+    expect(htmlSource.indexOf(setupActions)).toBeLessThan(htmlSource.indexOf(resetButton));
+    expect(styleSource).toContain(".reset-scores {");
+    expect(styleSource).toContain(".reset-scores.is-confirming {");
+    expect(styleSource).toContain(".reset-scores.is-done {");
+  });
+
+  test("reset scores flow uses integrated confirmation and clears stored runs", () => {
+    expect(appSource).toContain('resetScores: document.getElementById("reset-scores"),');
+    expect(appSource).toContain('dom.resetScores.addEventListener("click", () => {');
+    expect(appSource).toContain('dom.resetScores.classList.contains("is-confirming")');
+    expect(appSource).toContain("state.store.preferenceMatches = [];");
+    expect(appSource).toContain("state.store.abxRuns = [];");
+    expect(appSource).toContain("saveStore();");
+    expect(appSource).toContain("setTimeout(() => {");
+    expect(appSource).not.toContain("window.confirm(");
   });
 });
