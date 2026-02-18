@@ -14,9 +14,8 @@ bun.lock
 .DS_Store
 Thumbs.db
 
-# Reference docs & images
+# Reference docs
 *.pdf
-*.png
 
 # Windows artifacts
 nul
