@@ -986,28 +986,30 @@ export class AudioEngine extends EventTarget {
     };
   }
 
-  getEffectiveLoopForOffset(offset) {
+  getEffectiveLoopForOffset() {
+    const duration = this.duration || 0;
     const normalized = this.normalizeLoopRegion(this.loop.startTime, this.loop.endTime);
-    if (!this.loop.enabled || !normalized.isValid) {
+
+    if (this.loop.enabled && normalized.isValid) {
       return {
-        enabled: false,
+        enabled: true,
         startTime: normalized.startTime,
         endTime: normalized.endTime,
       };
     }
 
-    if (offset >= normalized.endTime - LOOP_EPSILON) {
+    if (!(duration > LOOP_EPSILON)) {
       return {
         enabled: false,
-        startTime: normalized.startTime,
-        endTime: normalized.endTime,
+        startTime: 0,
+        endTime: 0,
       };
     }
 
     return {
       enabled: true,
-      startTime: normalized.startTime,
-      endTime: normalized.endTime,
+      startTime: 0,
+      endTime: duration,
     };
   }
 
@@ -1039,7 +1041,7 @@ export class AudioEngine extends EventTarget {
     if (this.isPlaying && this.context && this.currentNodes.length > 0 && this.loop.enabled) {
       const currentTime = this.getCurrentTime();
       this.rebasePlaybackClock(currentTime);
-      this.sessionLoop = this.getEffectiveLoopForOffset(this.sessionStartOffset);
+      this.sessionLoop = this.getEffectiveLoopForOffset();
       this.applyLoopToCurrentNodes(this.sessionLoop);
     }
 
@@ -1068,7 +1070,7 @@ export class AudioEngine extends EventTarget {
     if (this.isPlaying && this.context && this.currentNodes.length > 0) {
       const currentTime = this.getCurrentTime();
       this.rebasePlaybackClock(currentTime);
-      this.sessionLoop = this.getEffectiveLoopForOffset(this.sessionStartOffset);
+      this.sessionLoop = this.getEffectiveLoopForOffset();
       this.applyLoopToCurrentNodes(this.sessionLoop);
     }
 
@@ -1183,10 +1185,14 @@ export class AudioEngine extends EventTarget {
     const sessionId = this.playbackSessionId + 1;
     this.playbackSessionId = sessionId;
 
-    const safeOffset = clamp(offset, 0, this.duration || 0);
+    let safeOffset = clamp(offset, 0, this.duration || 0);
+    this.sessionLoop = this.getEffectiveLoopForOffset();
+    if (this.sessionLoop.enabled && safeOffset >= this.sessionLoop.endTime - LOOP_EPSILON) {
+      safeOffset = this.sessionLoop.startTime;
+    }
+
     this.playbackOffset = safeOffset;
     this.sessionStartOffset = safeOffset;
-    this.sessionLoop = this.getEffectiveLoopForOffset(safeOffset);
 
     const when = this.context.currentTime + 0.01;
     this.startedAtContextTime = when;

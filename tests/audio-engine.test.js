@@ -20,6 +20,85 @@ function createFakeParam(initialValue) {
   };
 }
 
+function createFakeAudioContext(currentTime = 0) {
+  const sources = [];
+
+  const context = {
+    currentTime,
+    destination: {},
+    sources,
+    createBufferSource() {
+      const source = {
+        buffer: null,
+        loop: false,
+        loopStart: 0,
+        loopEnd: 0,
+        onended: null,
+        startCalls: [],
+        stopCalls: 0,
+        connectTargets: [],
+        connect(target) {
+          this.connectTargets.push(target);
+        },
+        disconnect() {},
+        start(when, offset) {
+          this.startCalls.push({ when, offset });
+        },
+        stop() {
+          this.stopCalls += 1;
+        },
+      };
+
+      sources.push(source);
+      return source;
+    },
+    createGain() {
+      const gainParam = {
+        value: 1,
+        setValueAtTime(value) {
+          this.value = value;
+        },
+      };
+
+      return {
+        gain: gainParam,
+        connect() {},
+        disconnect() {},
+      };
+    },
+  };
+
+  return context;
+}
+
+function configureEngineForPlayback(engine, { duration = 10, contextTime = 3 } = {}) {
+  const context = createFakeAudioContext(contextTime);
+  engine.context = context;
+  engine.masterGain = {
+    connect() {},
+    disconnect() {},
+    gain: {
+      value: 1,
+      setValueAtTime(value) {
+        this.value = value;
+      },
+    },
+  };
+
+  const variant = {
+    id: "a",
+    name: "A",
+    buffer: { duration },
+  };
+
+  engine.variants = [variant];
+  engine.variantMap = new Map([[variant.id, variant]]);
+  engine.activeVariantId = variant.id;
+  engine.duration = duration;
+
+  return context;
+}
+
 describe("AudioEngine.setActiveVariant", () => {
   test("crossfades between active and inactive variants", () => {
     const engine = new AudioEngine();
@@ -111,5 +190,54 @@ describe("AudioEngine loop controls", () => {
     const loop = engine.getLoopState();
     expect(loop.startTime).toBeCloseTo(29, 6);
     expect(loop.endTime).toBeCloseTo(30, 6);
+  });
+});
+
+describe("AudioEngine playback looping", () => {
+  test("loops the full track when no loop region is enabled", () => {
+    const engine = new AudioEngine();
+    const context = configureEngineForPlayback(engine, { duration: 10, contextTime: 5 });
+
+    engine.play();
+
+    const source = context.sources[0];
+    expect(source.loop).toBe(true);
+    expect(source.loopStart).toBe(0);
+    expect(source.loopEnd).toBe(10);
+    expect(source.startCalls[0].offset).toBe(0);
+
+    context.currentTime = engine.startedAtContextTime + 10.25;
+    expect(engine.getCurrentTime()).toBeCloseTo(0.25, 6);
+  });
+
+  test("restarts from the beginning when playback starts at track end", () => {
+    const engine = new AudioEngine();
+    const context = configureEngineForPlayback(engine, { duration: 12, contextTime: 9 });
+    engine.playbackOffset = 12;
+
+    engine.play();
+
+    const source = context.sources[0];
+    expect(source.startCalls[0].offset).toBe(0);
+    expect(engine.sessionStartOffset).toBe(0);
+  });
+
+  test("prioritizes an enabled loop region over full-track looping", () => {
+    const engine = new AudioEngine();
+    const context = configureEngineForPlayback(engine, { duration: 12, contextTime: 2 });
+    engine.setLoopRegion(2, 5);
+    engine.setLoopEnabled(true);
+    engine.playbackOffset = 9;
+
+    engine.play();
+
+    const source = context.sources[0];
+    expect(source.loop).toBe(true);
+    expect(source.loopStart).toBe(2);
+    expect(source.loopEnd).toBe(5);
+    expect(source.startCalls[0].offset).toBe(2);
+
+    context.currentTime = engine.startedAtContextTime + 3.6;
+    expect(engine.getCurrentTime()).toBeCloseTo(2.6, 6);
   });
 });
