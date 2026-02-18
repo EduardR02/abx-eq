@@ -81,7 +81,7 @@ describe("blind UI regression checks", () => {
 
     expect(htmlSource).toContain(setupActions);
     expect(htmlSource).toContain(resetButton);
-    expect(htmlSource.indexOf(setupActions)).toBeLessThan(htmlSource.indexOf(resetButton));
+    expect(htmlSource.indexOf(resetButton)).toBeLessThan(htmlSource.indexOf(setupActions));
     expect(styleSource).toContain(".reset-scores {");
     expect(styleSource).toContain(".reset-scores.is-confirming {");
     expect(styleSource).toContain(".reset-scores.is-done {");
