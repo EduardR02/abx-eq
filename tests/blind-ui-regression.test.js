@@ -131,6 +131,30 @@ describe("blind UI regression checks", () => {
     expect(appSource).toContain('dom.prefProgress.textContent = `Matchup ${matchupNumber} of ${progress.total} (${formatPhaseLabel(progress.phase)})`;');
   });
 
+  test("preference phase labels support adaptive scheduling", () => {
+    expect(appSource).toContain('if (phase === "adaptive") {');
+    expect(appSource).toContain('return "Adaptive";');
+    expect(appSource).toContain('if (phase === "complete") {');
+    expect(appSource).toContain('return "Completed";');
+    expect(appSource).toContain('if (phase === "refinement") {');
+    expect(appSource).toContain('if (phase === "discovery") {');
+    expect(appSource).toContain('phase: "adaptive",');
+    expect(appSource).toContain('const phase = state.preferenceScheduler?.progress.phase ?? "adaptive";');
+  });
+
+  test("results scheduling summary groups adaptive and legacy matches", () => {
+    expect(appSource).toContain("let adaptiveCount = 0;");
+    expect(appSource).toContain('if (match.phase === "discovery" || match.phase === "refinement") {');
+    expect(appSource).toContain('`Scheduling: ${adaptiveCount} adaptive + ${legacyCount} legacy.`');
+    expect(appSource).toContain('`Scheduling: ${adaptiveCount} adaptive.`');
+  });
+
+  test("round selection allows fewer than full pair coverage", () => {
+    expect(appSource).toContain("const minimumMatchups = 1;");
+    expect(appSource).toContain("state.selectedMatchups = Math.max(1, state.selectedMatchups);");
+    expect(appSource).not.toContain("state.selectedMatchups = Math.max(pairCount, state.selectedMatchups);");
+  });
+
   test("playback transport uses SVG icons", () => {
     expect(htmlSource).toContain('id="play-pause" class="icon-btn play-main"');
     expect(htmlSource).toContain("<svg viewBox=\"0 0 24 24\"");

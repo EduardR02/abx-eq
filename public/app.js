@@ -620,10 +620,19 @@ function revealPresets() {
 }
 
 function formatPhaseLabel(phase) {
+  if (phase === "adaptive") {
+    return "Adaptive";
+  }
+  if (phase === "complete") {
+    return "Completed";
+  }
   if (phase === "refinement") {
     return "Refinement phase";
   }
-  return "Discovery phase";
+  if (phase === "discovery") {
+    return "Discovery phase";
+  }
+  return "Adaptive";
 }
 
 function updatePreferenceUi() {
@@ -631,7 +640,7 @@ function updatePreferenceUi() {
   const progress = state.preferenceScheduler?.progress ?? {
     done: state.activePreferenceMatches.length,
     total: state.selectedMatchups,
-    phase: "discovery",
+    phase: "adaptive",
   };
 
   if (!pair) {
@@ -805,18 +814,15 @@ function renderResults() {
     && ids.has(match.presetB)
   ));
 
-  let discoveryCount = 0;
-  let refinementCount = 0;
+  let adaptiveCount = 0;
   let legacyCount = 0;
 
   const pairCounts = new Map();
   for (const match of relevantPreference) {
-    if (match.phase === "discovery") {
-      discoveryCount += 1;
-    } else if (match.phase === "refinement") {
-      refinementCount += 1;
-    } else {
+    if (match.phase === "discovery" || match.phase === "refinement") {
       legacyCount += 1;
+    } else {
+      adaptiveCount += 1;
     }
 
     const key = match.presetA < match.presetB
@@ -830,8 +836,8 @@ function renderResults() {
     dom.schedulingPairs.textContent = "";
   } else {
     const label = legacyCount > 0
-      ? `Scheduling: ${discoveryCount} discovery + ${refinementCount} refinement (${legacyCount} legacy round-based).`
-      : `Scheduling: ${discoveryCount} discovery + ${refinementCount} refinement.`;
+      ? `Scheduling: ${adaptiveCount} adaptive + ${legacyCount} legacy.`
+      : `Scheduling: ${adaptiveCount} adaptive.`;
     dom.schedulingSummary.textContent = label;
 
     const mostCompared = [...pairCounts.entries()]
@@ -1067,8 +1073,7 @@ function inferRoundPlanFromValue(value) {
 }
 
 function setSelectedMatchups(matchups, explicitPlan = null) {
-  const pairCount = pairCountForPresetCount(getSelectedPresetIdsFromSetup().length);
-  const minimumMatchups = pairCount > 0 ? pairCount : 1;
+  const minimumMatchups = 1;
   const safeMatchups = Number.isFinite(matchups) && matchups > 0
     ? Math.round(matchups)
     : getRoundPlanMatchups("standard");
@@ -1088,7 +1093,7 @@ function updateRoundSelectorUi() {
     state.selectedMatchups = planMatchups;
   }
 
-  const minimumMatchups = pairCount > 0 ? pairCount : 1;
+  const minimumMatchups = 1;
   state.selectedMatchups = Math.max(minimumMatchups, state.selectedMatchups);
   dom.roundsCustomInput.min = String(minimumMatchups);
   dom.roundsCustomInput.value = String(state.selectedMatchups);
@@ -1254,7 +1259,7 @@ async function showPreferenceCompleteInterstitial() {
 
 function persistPreferenceMatch(choice, pair) {
   const scoreA = choice === "A" ? 1 : choice === "B" ? 0 : 0.5;
-  const phase = state.preferenceScheduler?.progress.phase === "refinement" ? "refinement" : "discovery";
+  const phase = state.preferenceScheduler?.progress.phase ?? "adaptive";
   const matchupNumber = state.activePreferenceMatches.length + 1;
   const match = {
     selectionKey: state.selectionKey,
@@ -1372,12 +1377,11 @@ async function startPreferenceMode() {
   const { selectedPresetIds } = setup;
 
   const requestedMatchups = Number.parseInt(dom.roundsCustomInput.value, 10);
-  const pairCount = pairCountForPresetCount(selectedPresetIds.length);
   recomputeRoundPlanSuggestions(selectedPresetIds.length);
   state.selectedMatchups = Number.isFinite(requestedMatchups) && requestedMatchups > 0
     ? requestedMatchups
     : getRoundPlanMatchups("standard");
-  state.selectedMatchups = Math.max(pairCount, state.selectedMatchups);
+  state.selectedMatchups = Math.max(1, state.selectedMatchups);
   dom.roundsCustomInput.value = String(state.selectedMatchups);
   state.selectedRoundPlan = inferRoundPlanFromValue(state.selectedMatchups);
 

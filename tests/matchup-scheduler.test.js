@@ -7,7 +7,10 @@ function canonicalPair(matchup) {
   return first < second ? `${first}|${second}` : `${second}|${first}`;
 }
 
-function runScheduler(scheduler) {
+function runScheduler(
+  scheduler,
+  makeResult = (matchup) => ({ winnerId: matchup.presetA, loserId: matchup.presetB }),
+) {
   const results = [];
   const matchups = [];
 
@@ -18,77 +21,86 @@ function runScheduler(scheduler) {
     }
 
     matchups.push(next);
-    results.push({ winnerId: next.presetA, loserId: next.presetB });
+    results.push(makeResult(next, results, matchups));
   }
 
   return { results, matchups };
 }
 
 describe("MatchupScheduler", () => {
-  test("phase 1 covers all C(n,2) pairs exactly once", () => {
-    const scheduler = new MatchupScheduler(["a", "b", "c", "d"], 6, { random: () => 0 });
-    const results = [];
-    const seen = new Set();
-
-    for (let i = 0; i < 6; i += 1) {
-      const next = scheduler.next(results);
-      expect(next).not.toBeNull();
-      seen.add(canonicalPair(next));
-      results.push({ winnerId: next.presetA, loserId: next.presetB });
-    }
-
-    expect(seen.size).toBe(6);
-    expect(scheduler.next(results)).toBeNull();
-  });
-
-  test("phase 2 chooses the closest BT pair", () => {
-    const scheduler = new MatchupScheduler(["a", "b", "c", "d"], 120, { random: () => 0 });
-
-    const results = [];
-    for (let i = 0; i < 10; i += 1) {
-      results.push({ presetA: "b", presetB: "c", scoreA: i % 2 === 0 ? 1 : 0 });
-      results.push({ presetA: "a", presetB: "b", scoreA: 1 });
-      results.push({ presetA: "a", presetB: "c", scoreA: 1 });
-      results.push({ presetA: "a", presetB: "d", scoreA: 1 });
-      results.push({ presetA: "b", presetB: "d", scoreA: 1 });
-      results.push({ presetA: "c", presetB: "d", scoreA: 1 });
-    }
-
-    const next = scheduler.next(results);
-    expect(canonicalPair(next)).toBe("b|c");
-  });
-
-  test("anti-repetition penalizes very recent pairs", () => {
-    const scheduler = new MatchupScheduler(["a", "b", "c", "d"], 12, { random: () => 0 });
-    const results = [
-      { presetA: "a", presetB: "b", scoreA: 0.5 },
-      { presetA: "a", presetB: "c", scoreA: 0.5 },
-      { presetA: "a", presetB: "d", scoreA: 0.5 },
-      { presetA: "b", presetB: "c", scoreA: 0.5 },
-      { presetA: "b", presetB: "d", scoreA: 0.5 },
-      { presetA: "c", presetB: "d", scoreA: 0.5 },
-    ];
-
-    const next = scheduler.next(results);
-    const picked = canonicalPair(next);
-
-    expect(picked).not.toBe("c|d");
-    expect(["b|c", "b|d", "c|d"]).not.toContain(picked);
-  });
-
   test("respects the total matchup budget", () => {
-    const scheduler = new MatchupScheduler(["a", "b", "c"], 5, { random: () => 0 });
+    const scheduler = new MatchupScheduler(["a", "b", "c", "d"], 9, { random: () => 0 });
     const { matchups } = runScheduler(scheduler);
 
-    expect(matchups).toHaveLength(5);
+    expect(matchups).toHaveLength(9);
+    expect(scheduler.isComplete).toBe(true);
+    expect(scheduler.progress).toEqual({ done: 9, total: 9, phase: "complete" });
+  });
+
+  test("keeps scheduling a dominant profile after cold start", () => {
+    const scheduler = new MatchupScheduler(["a", "b", "c", "d", "e", "f", "g"], 37, {
+      random: () => 0,
+    });
+
+    const { matchups } = runScheduler(scheduler, (matchup) => {
+      if (matchup.presetA === "a") {
+        return { winnerId: "a", loserId: matchup.presetB };
+      }
+      if (matchup.presetB === "a") {
+        return { winnerId: "a", loserId: matchup.presetA };
+      }
+      return { winnerId: matchup.presetA, loserId: matchup.presetB };
+    });
+
+    const dominantAppearances = matchups.filter(
+      (matchup) => matchup.presetA === "a" || matchup.presetB === "a",
+    ).length;
+
+    expect(matchups).toHaveLength(37);
+    expect(dominantAppearances).toBeGreaterThan(10);
+  });
+
+  test("does not schedule the same pair in consecutive rounds", () => {
+    const scheduler = new MatchupScheduler(["a", "b", "c", "d"], 24, { random: () => 0 });
+    const { matchups } = runScheduler(
+      scheduler,
+      (matchup) => ({ presetA: matchup.presetA, presetB: matchup.presetB, scoreA: 0.5 }),
+    );
+
+    for (let i = 1; i < matchups.length; i += 1) {
+      expect(canonicalPair(matchups[i])).not.toBe(canonicalPair(matchups[i - 1]));
+    }
+  });
+
+  test("supports small budgets below C(n,2)", () => {
+    const scheduler = new MatchupScheduler(["a", "b", "c"], 2, { random: () => 0 });
+    const { matchups } = runScheduler(scheduler);
+
+    expect(scheduler.progress.total).toBe(2);
+    expect(matchups).toHaveLength(2);
     expect(scheduler.isComplete).toBe(true);
   });
 
-  test("enforces minimum budget of one full discovery pass", () => {
-    const scheduler = new MatchupScheduler(["a", "b", "c", "d"], 3, { random: () => 0 });
+  test("works with exactly two profiles", () => {
+    const scheduler = new MatchupScheduler(["a", "b"], 6, { random: () => 0 });
     const { matchups } = runScheduler(scheduler);
 
-    expect(scheduler.progress.total).toBe(6);
     expect(matchups).toHaveLength(6);
+    for (const matchup of matchups) {
+      expect(canonicalPair(matchup)).toBe("a|b");
+    }
+  });
+
+  test("is deterministic with seeded random tie-breaking", () => {
+    const buildSequence = () => {
+      const scheduler = new MatchupScheduler(["a", "b", "c", "d", "e"], 16, { random: () => 0 });
+      const { matchups } = runScheduler(
+        scheduler,
+        (matchup) => ({ presetA: matchup.presetA, presetB: matchup.presetB, scoreA: 0.5 }),
+      );
+      return matchups.map(canonicalPair);
+    };
+
+    expect(buildSequence()).toEqual(buildSequence());
   });
 });

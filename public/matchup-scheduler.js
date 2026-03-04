@@ -1,7 +1,5 @@
 import { fitBradleyTerry } from "./bradley-terry.js";
 
-const RECENCY_PENALTIES = [0.1, 0.3, 0.6];
-
 function pairKey(firstId, secondId) {
   return firstId < secondId ? `${firstId}|${secondId}` : `${secondId}|${firstId}`;
 }
@@ -135,21 +133,13 @@ function sanitizeStrength(value) {
   return 1;
 }
 
-function recencyPenalty(targetPairKey, recentPairKeys) {
-  const index = recentPairKeys.indexOf(targetPairKey);
-  if (index < 0 || index >= RECENCY_PENALTIES.length) {
-    return 1;
-  }
-  return RECENCY_PENALTIES[index];
-}
-
 function clampTotalMatchups(totalMatchups, pairCount) {
   if (!(pairCount > 0)) {
     return 0;
   }
 
-  const rounded = Number.isFinite(totalMatchups) ? Math.round(totalMatchups) : pairCount;
-  return Math.max(pairCount, rounded);
+  const rounded = Number.isFinite(totalMatchups) ? Math.round(totalMatchups) : 1;
+  return Math.max(1, rounded);
 }
 
 export class MatchupScheduler {
@@ -174,20 +164,14 @@ export class MatchupScheduler {
     this.presetSet = new Set(this.presetIds);
     this.pairs = buildAllPairs(this.presetIds);
     this.totalMatchups = clampTotalMatchups(totalMatchups, this.pairs.length);
-    this.discoveryCount = Math.min(this.pairs.length, this.totalMatchups);
     this.random = typeof random === "function" ? random : Math.random;
     this.fitOptions = fitOptions;
-    this.discoveryPairs = shuffle(this.pairs, this.random);
     this._done = 0;
     this._btPresets = this.presetIds.map((id) => ({ id, name: id }));
   }
 
   get progress() {
-    const phase = this._done >= this.totalMatchups
-      ? "complete"
-      : this._done < this.discoveryCount
-        ? "discovery"
-        : "refinement";
+    const phase = this._done >= this.totalMatchups ? "complete" : "adaptive";
 
     return {
       done: this._done,
@@ -206,11 +190,6 @@ export class MatchupScheduler {
 
     if (this.isComplete) {
       return null;
-    }
-
-    if (this._done < this.discoveryCount) {
-      const pair = this.discoveryPairs[this._done];
-      return this.randomizeOrder(pair);
     }
 
     const pair = this.selectAdaptivePair(normalizedResults);
@@ -247,34 +226,160 @@ export class MatchupScheduler {
       strengths = new Map();
     }
 
-    const recentPairKeys = [];
-    for (let index = results.length - 1; index >= 0 && recentPairKeys.length < 3; index -= 1) {
-      const result = results[index];
-      recentPairKeys.push(pairKey(result.presetA, result.presetB));
+    const appearanceCounts = new Map(this.presetIds.map((presetId) => [presetId, 0]));
+    const pairCounts = new Map();
+    for (const result of results) {
+      appearanceCounts.set(result.presetA, (appearanceCounts.get(result.presetA) ?? 0) + 1);
+      appearanceCounts.set(result.presetB, (appearanceCounts.get(result.presetB) ?? 0) + 1);
+
+      const key = pairKey(result.presetA, result.presetB);
+      pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1);
     }
+
+    const N = this.presetIds.length;
+    const T = this.totalMatchups;
+    const r = results.length;
+    const t = r / Math.max(1, T - 1);
+
+    const maxCoverage = Math.floor((2 * T) / N);
+    const rawCoverage = Math.floor(0.35 * ((2 * T) / N));
+    const coverageFloor = Math.min(4, Math.max(1, rawCoverage));
+    const F = Math.min(coverageFloor, maxCoverage);
+
+    const deficits = new Map();
+    let hasDeficit = false;
+    for (const presetId of this.presetIds) {
+      if (F <= 0) {
+        deficits.set(presetId, 0);
+        continue;
+      }
+
+      const seenCount = appearanceCounts.get(presetId) ?? 0;
+      const deficit = Math.max(0, F - seenCount) / F;
+      deficits.set(presetId, deficit);
+      if (deficit > 0) {
+        hasDeficit = true;
+      }
+    }
+
+    const previousPairKey = results.length > 0
+      ? pairKey(results[results.length - 1].presetA, results[results.length - 1].presetB)
+      : null;
+
+    let candidatePairs = this.pairs;
+    if (hasDeficit) {
+      const deficitPairs = [];
+      for (const pair of this.pairs) {
+        const [first, second] = pair;
+        if ((deficits.get(first) ?? 0) > 0 || (deficits.get(second) ?? 0) > 0) {
+          deficitPairs.push(pair);
+        }
+      }
+
+      if (deficitPairs.length > 0) {
+        const allRecentlyPlayed = previousPairKey !== null
+          && deficitPairs.every((pair) => pairKey(pair[0], pair[1]) === previousPairKey);
+        candidatePairs = allRecentlyPlayed ? this.pairs : deficitPairs;
+      }
+    }
+
+    const uncertainties = new Map();
+    const strengthsById = new Map();
+    const contenderOptimism = new Map();
+
+    let optimismMax = 1;
+    for (const presetId of this.presetIds) {
+      const m = appearanceCounts.get(presetId) ?? 0;
+      const u = 1 / Math.sqrt(1 + m);
+      const s = sanitizeStrength(strengths.get(presetId));
+      const opt = s * Math.exp(0.9 * u);
+
+      uncertainties.set(presetId, u);
+      strengthsById.set(presetId, s);
+      contenderOptimism.set(presetId, opt);
+      if (opt > optimismMax) {
+        optimismMax = opt;
+      }
+    }
+
+    const contenderScores = new Map();
+    for (const presetId of this.presetIds) {
+      contenderScores.set(presetId, (contenderOptimism.get(presetId) ?? 0) / optimismMax);
+    }
+
+    const wTop = 0.65 + (0.25 * t);
 
     const tieEpsilon = 1e-12;
     let bestScore = -Infinity;
+    let bestDeficit = -Infinity;
+    let bestPairCount = Infinity;
     let bestPairs = [];
 
-    for (const pair of this.pairs) {
+    for (const pair of candidatePairs) {
       const [first, second] = pair;
-      const firstStrength = sanitizeStrength(strengths.get(first));
-      const secondStrength = sanitizeStrength(strengths.get(second));
-      const winProbability = firstStrength / (firstStrength + secondStrength);
-      const informationScore = 0.5 - Math.abs(winProbability - 0.5);
-      const score = informationScore * recencyPenalty(pairKey(first, second), recentPairKeys);
+      const pairCount = pairCounts.get(pairKey(first, second)) ?? 0;
+
+      const firstUncertainty = uncertainties.get(first) ?? 1;
+      const secondUncertainty = uncertainties.get(second) ?? 1;
+
+      const firstStrength = strengthsById.get(first) ?? 1;
+      const secondStrength = strengthsById.get(second) ?? 1;
+      const gamma = 1 / (1 + (1.5 * (firstUncertainty + secondUncertainty)));
+
+      const adjustedFirst = Math.pow(firstStrength, gamma);
+      const adjustedSecond = Math.pow(secondStrength, gamma);
+      const winProbability = adjustedFirst / (adjustedFirst + adjustedSecond);
+      const information = 4 * winProbability * (1 - winProbability);
+
+      const topScore = Math.sqrt((contenderScores.get(first) ?? 0) * (contenderScores.get(second) ?? 0));
+      const rankScore = (firstUncertainty + secondUncertainty) / 2;
+      const relevance = (wTop * topScore) + ((1 - wTop) * rankScore);
+
+      const novelty = 1 / Math.sqrt(1 + pairCount);
+      const deficit = (deficits.get(first) ?? 0) + (deficits.get(second) ?? 0);
+      const deficitBoost = 1 + (0.8 * deficit);
+
+      const key = pairKey(first, second);
+      const repeatPenalty = previousPairKey !== null && key === previousPairKey ? 0.35 : 1;
+
+      const score = information * relevance * novelty * deficitBoost * repeatPenalty;
 
       if (score > bestScore + tieEpsilon) {
         bestScore = score;
+        bestDeficit = deficit;
+        bestPairCount = pairCount;
         bestPairs = [pair];
-      } else if (Math.abs(score - bestScore) <= tieEpsilon) {
+        continue;
+      }
+
+      if (Math.abs(score - bestScore) > tieEpsilon) {
+        continue;
+      }
+
+      if (deficit > bestDeficit + tieEpsilon) {
+        bestDeficit = deficit;
+        bestPairCount = pairCount;
+        bestPairs = [pair];
+        continue;
+      }
+
+      if (Math.abs(deficit - bestDeficit) > tieEpsilon) {
+        continue;
+      }
+
+      if (pairCount < bestPairCount) {
+        bestPairCount = pairCount;
+        bestPairs = [pair];
+        continue;
+      }
+
+      if (pairCount === bestPairCount) {
         bestPairs.push(pair);
       }
     }
 
     if (bestPairs.length === 0) {
-      return this.pairs[0];
+      return candidatePairs[0] ?? this.pairs[0] ?? null;
     }
 
     const pick = Math.floor(this.random() * bestPairs.length);
