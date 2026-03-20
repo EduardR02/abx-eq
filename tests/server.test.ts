@@ -167,7 +167,10 @@ describe("directory config API", () => {
     await mkdir(presetsDir, { recursive: true });
 
     await writeFile(path.join(musicDir, "sample.wav"), "");
-    await writeFile(path.join(presetsDir, "custom.txt"), "Preamp: 0 dB\nFilter 1: ON PK Fc 1000 Hz Gain 1.0 dB Q 1.0\n");
+    await writeFile(
+      path.join(presetsDir, "custom.txt"),
+      "Preamp: 0 dB\nFilter 1: ON PK Fc 1000 Hz Gain 1.0 dB Q 1.0\nChannel: L\nPreamp: -1.5 dB\nFilter 1: ON PK Fc 3200 Hz Gain 1.5 dB Q 3.0\n",
+    );
 
     const musicRel = path.relative(process.cwd(), musicDir).replace(/\\/g, "/");
     const presetsRel = path.relative(process.cwd(), presetsDir).replace(/\\/g, "/");
@@ -199,6 +202,10 @@ describe("directory config API", () => {
       expect(presets).toHaveLength(1);
       expect(presets[0].filename).toBe("custom.txt");
       expect(presets[0].name).toBe("custom");
+      expect(presets[0].leftPreampDb).toBe(-1.5);
+      expect(presets[0].leftFilters).toHaveLength(1);
+      expect(presets[0].rightPreampDb).toBe(0);
+      expect(presets[0].rightFilters).toEqual([]);
     } finally {
       server.stop(true);
       await rm(tempRoot, { recursive: true, force: true });

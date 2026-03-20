@@ -1,5 +1,6 @@
 import { access, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { parseEqualizerApo } from "./public/eq-parser.js";
 
 type EqFilter = {
   index: number;
@@ -14,6 +15,10 @@ type ParsedPreset = {
   filename: string;
   preampDb: number;
   filters: EqFilter[];
+  leftPreampDb: number;
+  leftFilters: EqFilter[];
+  rightPreampDb: number;
+  rightFilters: EqFilter[];
 };
 
 type DirectoryConfig = {
@@ -56,77 +61,18 @@ const MIME_TYPES: Record<string, string> = {
   ".wav": "audio/wav",
 };
 
-const PREAMP_RE = /^\s*Preamp:\s*([+-]?\d+(?:\.\d+)?)\s*dB\s*$/i;
-const FILTER_RE = /^\s*Filter\s+(\d+):\s*(ON|OFF)\s+([A-Z]+)\s+Fc\s+([+-]?\d+(?:\.\d+)?)\s*Hz\s+Gain\s+([+-]?\d+(?:\.\d+)?)\s*dB\s+Q\s+([+-]?\d+(?:\.\d+)?)\s*$/i;
-
 function parsePresetContent(text: string, filename: string): ParsedPreset {
-  const lines = text.split(/\r?\n/);
-  const filters: EqFilter[] = [];
-  let preampDb = 0;
-
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const rawLine = lines[lineIndex];
-    const line = rawLine.trim();
-
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-
-    const preampMatch = line.match(PREAMP_RE);
-    if (preampMatch) {
-      preampDb = Number(preampMatch[1]);
-      continue;
-    }
-
-    const filterMatch = line.match(FILTER_RE);
-    if (filterMatch) {
-      const index = Number(filterMatch[1]);
-      const enabled = filterMatch[2].toUpperCase() === "ON";
-      const rawType = filterMatch[3].toUpperCase();
-      const frequency = Number(filterMatch[4]);
-      const gainDb = Number(filterMatch[5]);
-      const q = Number(filterMatch[6]);
-
-      if (!enabled) {
-        continue;
-      }
-
-      if (!Number.isFinite(index) || !Number.isFinite(frequency) || !Number.isFinite(gainDb) || !Number.isFinite(q) || q <= 0 || frequency <= 0) {
-        throw new Error(`${filename}: invalid numeric values on line ${lineIndex + 1}`);
-      }
-
-      const typeMap: Record<string, EqFilter["type"]> = {
-        PK: "peaking",
-        PEQ: "peaking",
-        LSC: "lowshelf",
-        HSC: "highshelf",
-      };
-
-      const type = typeMap[rawType];
-      if (!type) {
-        throw new Error(`${filename}: unsupported filter type '${rawType}' on line ${lineIndex + 1}`);
-      }
-
-      filters.push({
-        index,
-        type,
-        frequency,
-        gainDb,
-        q,
-      });
-      continue;
-    }
-
-    if (/^\s*Filter\s+/i.test(line) || /^\s*Preamp:/i.test(line)) {
-      throw new Error(`${filename}: failed to parse line ${lineIndex + 1}: ${rawLine}`);
-    }
-  }
+  const parsed = parseEqualizerApo(text, filename) as Omit<ParsedPreset, "name" | "filename">;
 
   return {
     name: path.basename(filename, path.extname(filename)),
     filename,
-    preampDb,
-    filters,
+    preampDb: parsed.preampDb,
+    filters: parsed.filters,
+    leftPreampDb: parsed.leftPreampDb,
+    leftFilters: parsed.leftFilters,
+    rightPreampDb: parsed.rightPreampDb,
+    rightFilters: parsed.rightFilters,
   };
 }
 

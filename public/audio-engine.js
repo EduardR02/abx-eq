@@ -339,6 +339,58 @@ function applyGainToBuffer(audioBuffer, gainLinear) {
   }
 }
 
+function applyGainToSamples(samples, gainLinear) {
+  if (!samples || gainLinear === 1) {
+    return;
+  }
+
+  for (let i = 0; i < samples.length; i += 1) {
+    samples[i] *= gainLinear;
+  }
+}
+
+function getPresetFilters(preset, key) {
+  const filters = preset?.[key];
+  return Array.isArray(filters) ? filters : [];
+}
+
+function hasPerChannelEq(preset) {
+  return (preset?.leftPreampDb ?? 0) !== 0
+    || (preset?.rightPreampDb ?? 0) !== 0
+    || getPresetFilters(preset, "leftFilters").length > 0
+    || getPresetFilters(preset, "rightFilters").length > 0;
+}
+
+function createGlobalOnlyPreset(preset) {
+  return {
+    ...preset,
+    leftPreampDb: 0,
+    leftFilters: [],
+    rightPreampDb: 0,
+    rightFilters: [],
+  };
+}
+
+function applyFiltersToChannels(channelData, filters, sampleRate) {
+  if (!Array.isArray(filters) || filters.length === 0 || channelData.length === 0) {
+    return;
+  }
+
+  for (const filter of filters) {
+    const coeffs = designBiquad({
+      type: filter.type,
+      frequency: filter.frequency,
+      q: filter.q,
+      gainDb: filter.gainDb,
+      sampleRate,
+    });
+
+    for (const samples of channelData) {
+      applyBiquadInPlace(samples, coeffs);
+    }
+  }
+}
+
 function cloneAudioBuffer(audioContext, sourceBuffer) {
   const clone = audioContext.createBuffer(
     sourceBuffer.numberOfChannels,
@@ -371,7 +423,12 @@ async function mapWithConcurrency(items, limit, worker) {
 }
 
 async function renderPresetWithOfflineContext(sourceBuffer, preset) {
-  const OfflineAudioContextCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (hasPerChannelEq(preset)) {
+    return null;
+  }
+
+  const OfflineAudioContextCtor = globalThis.window?.OfflineAudioContext
+    || globalThis.window?.webkitOfflineAudioContext;
   if (!OfflineAudioContextCtor) {
     return null;
   }
@@ -394,16 +451,14 @@ async function renderPresetWithOfflineContext(sourceBuffer, preset) {
     tailNode = preampNode;
   }
 
-  if (Array.isArray(preset.filters)) {
-    for (const filter of preset.filters) {
-      const biquad = offline.createBiquadFilter();
-      biquad.type = filter.type;
-      biquad.frequency.value = filter.frequency;
-      biquad.Q.value = filter.q;
-      biquad.gain.value = filter.gainDb;
-      tailNode.connect(biquad);
-      tailNode = biquad;
-    }
+  for (const filter of getPresetFilters(preset, "filters")) {
+    const biquad = offline.createBiquadFilter();
+    biquad.type = filter.type;
+    biquad.frequency.value = filter.frequency;
+    biquad.Q.value = filter.q;
+    biquad.gain.value = filter.gainDb;
+    tailNode.connect(biquad);
+    tailNode = biquad;
   }
 
   tailNode.connect(offline.destination);
@@ -413,26 +468,33 @@ async function renderPresetWithOfflineContext(sourceBuffer, preset) {
 
 function renderPresetWithInPlaceFilters(audioContext, sourceBuffer, preset) {
   const buffer = cloneAudioBuffer(audioContext, sourceBuffer);
-  const preampLinear = dbToLinear(preset.preampDb ?? 0);
-  applyGainToBuffer(buffer, preampLinear);
+  const channelData = new Array(buffer.numberOfChannels);
+  for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+    channelData[channel] = buffer.getChannelData(channel);
+  }
 
-  if (Array.isArray(preset.filters)) {
-    for (const filter of preset.filters) {
-      const coeffs = designBiquad({
-        type: filter.type,
-        frequency: filter.frequency,
-        q: filter.q,
-        gainDb: filter.gainDb,
-        sampleRate: sourceBuffer.sampleRate,
-      });
+  const globalPreampLinear = dbToLinear(preset.preampDb ?? 0);
+  for (const samples of channelData) {
+    applyGainToSamples(samples, globalPreampLinear);
+  }
+  applyFiltersToChannels(channelData, getPresetFilters(preset, "filters"), sourceBuffer.sampleRate);
 
-      for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
-        applyBiquadInPlace(buffer.getChannelData(channel), coeffs);
-      }
-    }
+  if (channelData[0]) {
+    applyGainToSamples(channelData[0], dbToLinear(preset.leftPreampDb ?? 0));
+    applyFiltersToChannels([channelData[0]], getPresetFilters(preset, "leftFilters"), sourceBuffer.sampleRate);
+  }
+
+  if (channelData[1]) {
+    applyGainToSamples(channelData[1], dbToLinear(preset.rightPreampDb ?? 0));
+    applyFiltersToChannels([channelData[1]], getPresetFilters(preset, "rightFilters"), sourceBuffer.sampleRate);
   }
 
   return buffer;
+}
+
+async function renderPreset(audioContext, sourceBuffer, preset) {
+  return await renderPresetWithOfflineContext(sourceBuffer, preset)
+    ?? renderPresetWithInPlaceFilters(audioContext, sourceBuffer, preset);
 }
 
 export class AudioEngine extends EventTarget {
@@ -542,10 +604,11 @@ export class AudioEngine extends EventTarget {
 
     let completed = 0;
     const rendered = await mapWithConcurrency(presets, 3, async (preset) => {
-      const renderedBuffer = await renderPresetWithOfflineContext(sourceBuffer, preset)
-        ?? renderPresetWithInPlaceFilters(context, sourceBuffer, preset);
-
-      const measuredDb = measureLoudness(renderedBuffer);
+      const renderedBuffer = await renderPreset(context, sourceBuffer, preset);
+      const measurementBuffer = hasPerChannelEq(preset)
+        ? await renderPreset(context, sourceBuffer, createGlobalOnlyPreset(preset))
+        : renderedBuffer;
+      const measuredDb = measureLoudness(measurementBuffer);
       completed += 1;
       onProgress?.({
         done: 2 + completed,

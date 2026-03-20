@@ -130,6 +130,10 @@ export class LocalSource {
           filename: file.name,
           preampDb: parsed.preampDb,
           filters: parsed.filters,
+          leftPreampDb: parsed.leftPreampDb,
+          leftFilters: parsed.leftFilters,
+          rightPreampDb: parsed.rightPreampDb,
+          rightFilters: parsed.rightFilters,
         });
       }
     }));

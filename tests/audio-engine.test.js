@@ -125,12 +125,12 @@ function createSimpleAudioBuffer({
   };
 }
 
-function createPrepareTrackContext() {
+function createPrepareTrackContext(decodedBuffer = createSimpleAudioBuffer()) {
   return {
     currentTime: 0,
     destination: {},
     async decodeAudioData() {
-      return createSimpleAudioBuffer();
+      return decodedBuffer;
     },
     createBuffer(channels, length, sampleRate) {
       return createSimpleAudioBuffer({ channels, length, sampleRate, fillValue: 0 });
@@ -375,5 +375,140 @@ describe("AudioEngine.prepareTrack sources", () => {
     });
 
     expect(fetchCalls).toEqual(["/music/example.wav"]);
+  });
+
+  test("uses in-place rendering for presets with per-channel EQ", async () => {
+    const engine = new AudioEngine();
+    let offlineRenderCount = 0;
+    engine.context = createPrepareTrackContext(createSimpleAudioBuffer({
+      channels: 2,
+      fillValue: 0.1,
+    }));
+    engine.masterGain = {
+      connect() {},
+      disconnect() {},
+      gain: {
+        value: 1,
+        setValueAtTime(value) {
+          this.value = value;
+        },
+      },
+    };
+    globalThis.window = {
+      OfflineAudioContext: class FakeOfflineAudioContext {
+        constructor(channels, length, sampleRate) {
+          this.channels = channels;
+          this.length = length;
+          this.sampleRate = sampleRate;
+          this.destination = {};
+          offlineRenderCount += 1;
+        }
+
+        createBufferSource() {
+          return {
+            buffer: null,
+            connect() {},
+            start() {},
+          };
+        }
+
+        createGain() {
+          return {
+            gain: { value: 1 },
+            connect() {},
+          };
+        }
+
+        createBiquadFilter() {
+          return {
+            type: null,
+            frequency: { value: 0 },
+            Q: { value: 0 },
+            gain: { value: 0 },
+            connect() {},
+          };
+        }
+
+        async startRendering() {
+          return createSimpleAudioBuffer({
+            channels: this.channels,
+            length: this.length,
+            sampleRate: this.sampleRate,
+            fillValue: 0.1,
+          });
+        }
+      },
+    };
+
+    const result = await engine.prepareTrack({
+      trackData: new Uint8Array([1, 2, 3, 4]).buffer,
+      presets: [{
+        id: "a",
+        name: "A",
+        preampDb: -6,
+        filters: [],
+        leftPreampDb: 6,
+        leftFilters: [],
+        rightPreampDb: -6,
+        rightFilters: [],
+      }],
+      normalizationMode: "rms",
+    });
+
+    const buffer = result.variants[0].buffer;
+    expect(offlineRenderCount).toBe(1);
+    expect(result.variants[0].normalizationDb).toBeCloseTo(0, 6);
+    expect(buffer.getChannelData(0)[0]).toBeCloseTo(0.1, 6);
+    expect(buffer.getChannelData(1)[0]).toBeCloseTo(0.1 * (10 ** (-12 / 20)), 6);
+  });
+
+  test("measures loudness from global EQ only when per-channel EQ exists", async () => {
+    const engine = new AudioEngine();
+    engine.context = createPrepareTrackContext(createSimpleAudioBuffer({
+      channels: 2,
+      fillValue: 0.01,
+    }));
+    engine.masterGain = {
+      connect() {},
+      disconnect() {},
+      gain: {
+        value: 1,
+        setValueAtTime(value) {
+          this.value = value;
+        },
+      },
+    };
+
+    const result = await engine.prepareTrack({
+      trackData: new Uint8Array([1, 2, 3, 4]).buffer,
+      presets: [
+        {
+          id: "flat",
+          name: "Flat",
+          preampDb: 0,
+          filters: [],
+          leftPreampDb: 0,
+          leftFilters: [],
+          rightPreampDb: 0,
+          rightFilters: [],
+        },
+        {
+          id: "per-channel",
+          name: "Per-channel",
+          preampDb: 0,
+          filters: [],
+          leftPreampDb: 6,
+          leftFilters: [],
+          rightPreampDb: 0,
+          rightFilters: [],
+        },
+      ],
+      normalizationMode: "rms",
+    });
+
+    const boosted = result.variants.find((variant) => variant.id === "per-channel");
+    expect(boosted.normalizationDb).toBeCloseTo(0, 6);
+    expect(boosted.buffer.getChannelData(0)[0]).toBeCloseTo(0.01 * (10 ** (6 / 20)), 6);
+    expect(boosted.buffer.getChannelData(1)[0]).toBeCloseTo(0.01, 6);
   });
 });
