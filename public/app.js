@@ -102,6 +102,7 @@ const state = {
   abxPairs: [],
   abxRun: null,
   abxListeningTarget: "A",
+  hearingLossPresetId: null,
 
   store: {
     preferenceMatches: [],
@@ -131,6 +132,7 @@ const dom = {
   preferenceScreen: document.getElementById("preference-screen"),
   roundCompleteScreen: document.getElementById("round-complete-screen"),
   abxScreen: document.getElementById("abx-screen"),
+  hearingLossScreen: document.getElementById("hearing-loss-screen"),
   resultsScreen: document.getElementById("results-screen"),
   playbackControls: document.getElementById("playback-controls"),
 
@@ -157,6 +159,7 @@ const dom = {
   roundsSummary: document.getElementById("rounds-summary"),
   startPreferenceBtn: document.getElementById("start-preference"),
   startAbxBtn: document.getElementById("start-abx"),
+  startHearingLossBtn: document.getElementById("start-hearing-loss"),
   resetScores: document.getElementById("reset-scores"),
 
   loadingText: document.getElementById("loading-text"),
@@ -197,6 +200,11 @@ const dom = {
   abxProgress: document.getElementById("abx-progress"),
   abxStats: document.getElementById("abx-stats"),
 
+  hearingLossTrackSelect: document.getElementById("track-select-hearing-loss"),
+  hearingLossPresetName: document.getElementById("hearing-loss-preset-name"),
+  hearingLossCurrentBtn: document.getElementById("hearing-loss-current"),
+  hearingLossSimulatedBtn: document.getElementById("hearing-loss-simulated"),
+
   restartBtn: document.getElementById("restart"),
   rewindBtn: document.getElementById("rewind"),
   playPauseBtn: document.getElementById("play-pause"),
@@ -210,8 +218,6 @@ const dom = {
   loopTimes: document.getElementById("loop-times"),
   loopToggleBtn: document.getElementById("loop-toggle"),
   volumeSlider: document.getElementById("volume"),
-  hearingLossToggle: document.getElementById("hearing-loss-toggle"),
-  hearingLossToggleState: document.getElementById("hearing-loss-toggle-state"),
   hearingLossModeAge: document.getElementById("hearing-loss-mode-age"),
   hearingLossModeManual: document.getElementById("hearing-loss-mode-manual"),
   hearingLossAgeGroup: document.getElementById("hearing-loss-age-group"),
@@ -315,6 +321,7 @@ function showScreen(name) {
     preference: dom.preferenceScreen,
     roundComplete: dom.roundCompleteScreen,
     abx: dom.abxScreen,
+    hearingLoss: dom.hearingLossScreen,
     results: dom.resultsScreen,
   };
 
@@ -322,7 +329,7 @@ function showScreen(name) {
     element.classList.toggle("hidden", key !== name);
   }
 
-  const showPlayback = name === "preference" || name === "abx";
+  const showPlayback = name === "preference" || name === "abx" || name === "hearingLoss";
 
   if (showPlayback) {
     if (state.playbackHideTimer) {
@@ -813,11 +820,12 @@ function updateHearingLossUi() {
   const activeMode = state.hearingLoss.mode;
   const activeCutoffHz = getActiveHearingLossCutoffHz();
   const approxManualAge = getApproxAgeForCutoffHz(state.hearingLoss.manualCutoffHz);
-  const isEnabled = state.hearingLoss.enabled;
+  const isSimulated = state.hearingLoss.enabled;
+  const presetName = getPresetById(state.hearingLossPresetId)?.name ?? "";
 
-  dom.hearingLossToggle.classList.toggle("is-active", isEnabled);
-  dom.hearingLossToggle.setAttribute("aria-pressed", String(isEnabled));
-  dom.hearingLossToggleState.textContent = isEnabled ? "On" : "Off";
+  dom.hearingLossPresetName.textContent = presetName;
+  setActiveButton(dom.hearingLossCurrentBtn, !isSimulated);
+  setActiveButton(dom.hearingLossSimulatedBtn, isSimulated);
 
   dom.hearingLossModeAge.classList.toggle("is-selected", activeMode === "age");
   dom.hearingLossModeAge.setAttribute("aria-pressed", String(activeMode === "age"));
@@ -836,14 +844,14 @@ function updateHearingLossUi() {
     ? `Age ${state.hearingLoss.age} approximates a roll-off above ${formatFrequencyLabel(activeCutoffHz)}.`
     : `Manual mode rolls off the top end above ${formatFrequencyLabel(activeCutoffHz)}.`;
 
-  dom.hearingLossSummary.textContent = isEnabled
-    ? `${description} This is applied after the active EQ.`
-    : `Off. ${description}`;
+  dom.hearingLossSummary.textContent = isSimulated
+    ? `${description} This is applied after the selected EQ.`
+    : `Current hearing is bypassed. ${description}`;
 }
 
 function applyHearingLossState() {
   audio.setHearingLoss({
-    enabled: state.hearingLoss.enabled,
+    enabled: state.mode === "hearing-loss" && state.hearingLoss.enabled,
     cutoffHz: getActiveHearingLossCutoffHz(),
   });
   updateHearingLossUi();
@@ -1296,10 +1304,11 @@ function syncTrackSelects() {
   dom.setupTrackSelect.value = state.selectedTrack;
   dom.prefTrackSelect.value = state.selectedTrack;
   dom.abxTrackSelect.value = state.selectedTrack;
+  dom.hearingLossTrackSelect.value = state.selectedTrack;
 }
 
 function renderTrackSelects() {
-  const selectNodes = [dom.setupTrackSelect, dom.prefTrackSelect, dom.abxTrackSelect];
+  const selectNodes = [dom.setupTrackSelect, dom.prefTrackSelect, dom.abxTrackSelect, dom.hearingLossTrackSelect];
 
   for (const select of selectNodes) {
     select.innerHTML = "";
@@ -1328,13 +1337,21 @@ function renderAbxPairSelect() {
   }
 }
 
-async function prepareTrackForSelection() {
+function getPresetsForCurrentMode() {
+  if (state.mode === "hearing-loss") {
+    const preset = getPresetById(state.hearingLossPresetId);
+    return preset ? [preset] : [];
+  }
+
+  return listCurrentPresets();
+}
+
+async function prepareTrackForPresets(activePresets) {
   const token = state.prepareToken + 1;
   state.prepareToken = token;
 
-  const activePresets = listCurrentPresets();
-  if (activePresets.length < 2) {
-    throw new Error("Select at least two presets.");
+  if (!Array.isArray(activePresets) || activePresets.length === 0) {
+    throw new Error("Select at least one preset.");
   }
   if (!state.selectedTrack) {
     throw new Error("Select a track first.");
@@ -1368,6 +1385,10 @@ async function prepareTrackForSelection() {
   }
 
   audio.setVariants(result.variants);
+}
+
+async function prepareTrackForCurrentMode() {
+  return prepareTrackForPresets(getPresetsForCurrentMode());
 }
 
 function loadCurrentPair({ autoPlay = false } = {}) {
@@ -1497,11 +1518,6 @@ function getModeStartSetup() {
   state.selectedTrack = selectedTrack;
   state.normalizationMode = normalizationMode;
 
-  if (selectedPresetIds.length < 2) {
-    setSetupError("Select at least two presets.");
-    return null;
-  }
-
   return {
     selectedPresetIds,
     selectedTrack,
@@ -1519,6 +1535,11 @@ async function startPreferenceMode() {
 
   const { selectedPresetIds } = setup;
 
+  if (selectedPresetIds.length < 2) {
+    setSetupError("Select at least two presets.");
+    return;
+  }
+
   const requestedMatchups = Number.parseInt(dom.roundsCustomInput.value, 10);
   recomputeRoundPlanSuggestions(selectedPresetIds.length);
   state.selectedMatchups = Number.isFinite(requestedMatchups) && requestedMatchups > 0
@@ -1535,10 +1556,12 @@ async function startPreferenceMode() {
   state.currentPreferencePair = state.preferenceScheduler.next(state.activePreferenceMatches);
   state.abxPairs = buildAbxPairs(selectedPresetIds);
   state.isAdvancingPreference = false;
+  state.hearingLossPresetId = null;
 
   syncTrackSelects();
+  applyHearingLossState();
 
-  await prepareTrackForSelection();
+  await prepareTrackForCurrentMode();
   showScreen("preference");
   loadCurrentPair({ autoPlay: true });
 }
@@ -1551,18 +1574,55 @@ async function startAbxMode() {
 
   const { selectedPresetIds } = setup;
 
+  if (selectedPresetIds.length < 2) {
+    setSetupError("Select at least two presets.");
+    return;
+  }
+
   state.selectionKey = getSelectionKey(selectedPresetIds);
   state.mode = "abx";
   state.abxPairs = buildAbxPairs(selectedPresetIds);
   state.abxRun = null;
   state.abxListeningTarget = "A";
+  state.hearingLossPresetId = null;
 
   renderAbxPairSelect();
   syncTrackSelects();
+  applyHearingLossState();
 
-  await prepareTrackForSelection();
+  await prepareTrackForCurrentMode();
   showScreen("abx");
   updateAbxUi();
+}
+
+async function startHearingLossMode() {
+  const setup = getModeStartSetup();
+  if (!setup) {
+    return;
+  }
+
+  const { selectedPresetIds } = setup;
+
+  if (selectedPresetIds.length !== 1) {
+    setSetupError("Select exactly one preset for hearing loss preview.");
+    return;
+  }
+
+  state.selectionKey = getSelectionKey(selectedPresetIds);
+  state.mode = "hearing-loss";
+  state.hearingLossPresetId = selectedPresetIds[0];
+  state.hearingLoss.enabled = true;
+  state.preferenceScheduler = null;
+  state.currentPreferencePair = null;
+  state.activePreferenceMatches = [];
+  state.abxRun = null;
+
+  syncTrackSelects();
+  applyHearingLossState();
+
+  await prepareTrackForCurrentMode();
+  showScreen("hearingLoss");
+  loadHearingLossMode({ autoPlay: true });
 }
 
 function switchPreferenceSide(side) {
@@ -1670,7 +1730,7 @@ async function handleTrackChange(track) {
   syncTrackSelects();
 
   try {
-    await prepareTrackForSelection();
+    await prepareTrackForCurrentMode();
     if (state.mode === "preference") {
       loadCurrentPair({ autoPlay: shouldResume });
       showScreen("preference");
@@ -1680,6 +1740,9 @@ async function handleTrackChange(track) {
       }
       showScreen("abx");
       updateAbxUi();
+    } else if (state.mode === "hearing-loss") {
+      showScreen("hearingLoss");
+      loadHearingLossMode({ autoPlay: shouldResume });
     }
   } catch (error) {
     setSetupError(error instanceof Error ? error.message : String(error));
@@ -1906,6 +1969,15 @@ function handleKeyboard(event) {
     } else if (key === "c") {
       guessAbx("B");
     }
+    return;
+  }
+
+  if (state.mode === "hearing-loss" && !dom.hearingLossScreen.classList.contains("hidden")) {
+    if (key === "1" || key === "a") {
+      setHearingLossSimulationEnabled(false);
+    } else if (key === "2" || key === "b") {
+      setHearingLossSimulationEnabled(true);
+    }
   }
 }
 
@@ -2114,6 +2186,8 @@ function resetToSetup() {
   state.preferenceScheduler = null;
   state.currentPreferencePair = null;
   state.activePreferenceMatches = [];
+  state.hearingLossPresetId = null;
+  applyHearingLossState();
   showScreen("setup");
 }
 
@@ -2152,9 +2226,13 @@ function handleSetupTrackSelectChange(event) {
   syncTrackSelects();
 }
 
-function handleHearingLossToggle() {
-  state.hearingLoss.enabled = !state.hearingLoss.enabled;
+function setHearingLossSimulationEnabled(enabled, { autoPlay = false } = {}) {
+  state.hearingLoss.enabled = Boolean(enabled);
   applyHearingLossState();
+
+  if (autoPlay) {
+    audio.play();
+  }
 }
 
 function setHearingLossMode(mode) {
@@ -2200,6 +2278,18 @@ function handleHearingLossCutoffInput(event) {
 
 function commitHearingLossCutoffInput() {
   dom.hearingLossCutoffInput.value = String(state.hearingLoss.manualCutoffHz);
+}
+
+function loadHearingLossMode({ autoPlay = false } = {}) {
+  if (!state.hearingLossPresetId) {
+    return;
+  }
+
+  audio.setActiveVariant(state.hearingLossPresetId);
+  applyHearingLossState();
+  if (autoPlay) {
+    audio.play();
+  }
 }
 
 function setDropZoneActive(active) {
@@ -2280,6 +2370,10 @@ function attachEvents() {
     withAudioContext(startAbxMode);
   });
 
+  dom.startHearingLossBtn.addEventListener("click", () => {
+    withAudioContext(startHearingLossMode);
+  });
+
   dom.resetScores.addEventListener("click", () => {
     if (dom.resetScores.classList.contains("is-confirming")) {
       clearAllScores();
@@ -2317,7 +2411,7 @@ function attachEvents() {
     resetToSetup();
   });
 
-  for (const select of [dom.prefTrackSelect, dom.abxTrackSelect]) {
+  for (const select of [dom.prefTrackSelect, dom.abxTrackSelect, dom.hearingLossTrackSelect]) {
     select.addEventListener("change", handleModeTrackSelectChange);
   }
 
@@ -2358,6 +2452,9 @@ function attachEvents() {
   dom.abxSwitchX.addEventListener("click", () => listenAbx("X"));
   dom.abxGuessA.addEventListener("click", () => guessAbx("A"));
   dom.abxGuessB.addEventListener("click", () => guessAbx("B"));
+
+  dom.hearingLossCurrentBtn.addEventListener("click", () => setHearingLossSimulationEnabled(false));
+  dom.hearingLossSimulatedBtn.addEventListener("click", () => setHearingLossSimulationEnabled(true));
 
   dom.restartBtn.addEventListener("click", () => audio.restart());
   dom.rewindBtn.addEventListener("click", () => audio.skip(-5));
@@ -2401,7 +2498,6 @@ function attachEvents() {
     audio.setVolume(Number(dom.volumeSlider.value));
   });
 
-  dom.hearingLossToggle.addEventListener("click", handleHearingLossToggle);
   dom.hearingLossModeAge.addEventListener("click", () => setHearingLossMode("age"));
   dom.hearingLossModeManual.addEventListener("click", () => setHearingLossMode("manual"));
   dom.hearingLossAgeInput.addEventListener("input", handleHearingLossAgeInput);
@@ -2442,6 +2538,9 @@ function attachEvents() {
     }
     if (state.mode === "abx") {
       updateAbxUi();
+    }
+    if (state.mode === "hearing-loss") {
+      updateHearingLossUi();
     }
   });
 

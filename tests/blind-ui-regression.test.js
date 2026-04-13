@@ -161,8 +161,13 @@ describe("blind UI regression checks", () => {
     expect(appSource).toContain("dom.playPauseBtn.innerHTML = playback.isPlaying ? PAUSE_ICON_SVG : PLAY_ICON_SVG;");
   });
 
-  test("playback controls include hearing loss simulation controls", () => {
-    expect(htmlSource).toContain('id="hearing-loss-toggle"');
+  test("setup and dedicated screen include hearing loss preview controls", () => {
+    expect(htmlSource).toContain('id="start-hearing-loss"');
+    expect(htmlSource).toContain('id="hearing-loss-screen"');
+    expect(htmlSource).toContain('id="track-select-hearing-loss"');
+    expect(htmlSource).toContain('id="hearing-loss-preset-name"');
+    expect(htmlSource).toContain('id="hearing-loss-current"');
+    expect(htmlSource).toContain('id="hearing-loss-simulated"');
     expect(htmlSource).toContain('id="hearing-loss-mode-age"');
     expect(htmlSource).toContain('id="hearing-loss-mode-manual"');
     expect(htmlSource).toContain('id="hearing-loss-age"');
@@ -170,15 +175,20 @@ describe("blind UI regression checks", () => {
     expect(htmlSource).toContain('id="hearing-loss-cutoff"');
     expect(htmlSource).toContain('id="hearing-loss-cutoff-meta"');
     expect(htmlSource).toContain('id="hearing-loss-summary"');
+    expect(appSource).toContain('state.mode = "hearing-loss";');
+    expect(appSource).toContain('setSetupError("Select exactly one preset for hearing loss preview.");');
+    expect(appSource).toContain('enabled: state.mode === "hearing-loss" && state.hearingLoss.enabled,');
     expect(appSource).toContain('mode: "age",');
     expect(appSource).toContain("function getHearingLossCutoffForAge(age) {");
     expect(appSource).toContain("function getApproxAgeForCutoffHz(cutoffHz) {");
+    expect(appSource).toContain("function loadHearingLossMode({ autoPlay = false } = {}) {");
     expect(appSource).toContain('dom.hearingLossAgeMeta.textContent = `Approx cutoff ${formatFrequencyLabel(getHearingLossCutoffForAge(state.hearingLoss.age))}`;');
     expect(appSource).toContain('dom.hearingLossCutoffMeta.textContent = `Approx age ${approxManualAge} years`;');
     expect(appSource).toContain("audio.setHearingLoss({");
-    expect(styleSource).toContain(".hearing-loss-row");
+    expect(styleSource).toContain("#hearing-loss-screen {");
+    expect(styleSource).toContain(".hearing-loss-hero {");
+    expect(styleSource).toContain(".hearing-loss-card {");
     expect(styleSource).toContain(".hearing-loss-input-meta");
-    expect(styleSource).toContain(".hearing-loss-toggle.is-active");
     expect(styleSource).toContain(".hearing-loss-mode-btn.is-selected");
   });
 

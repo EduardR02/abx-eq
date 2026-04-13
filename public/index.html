@@ -90,6 +90,7 @@
               <div class="actions stacked">
                 <button id="start-preference" class="primary">Prepare and Start Preference Test</button>
                 <button id="start-abx" class="secondary">Prepare and Start ABX Test</button>
+                <button id="start-hearing-loss" class="secondary">Prepare and Start Hearing Loss Preview</button>
               </div>
             </div>
           </div>
@@ -219,36 +220,65 @@
           </div>
         </section>
 
-        <section id="playback-controls" class="panel hidden">
-          <h2 class="visually-hidden">Playback</h2>
-          <div class="hearing-loss-row">
-            <div class="hearing-loss-topline">
-              <button id="hearing-loss-toggle" class="secondary hearing-loss-toggle" type="button" aria-pressed="false">
-                Hearing Loss
-                <span id="hearing-loss-toggle-state" class="hearing-loss-toggle-state">Off</span>
-              </button>
-
-              <div class="hearing-loss-mode" role="tablist" aria-label="Hearing loss input mode">
-                <button id="hearing-loss-mode-age" class="hearing-loss-mode-btn is-selected" type="button" aria-pressed="true">Age</button>
-                <button id="hearing-loss-mode-manual" class="hearing-loss-mode-btn" type="button" aria-pressed="false">Manual</button>
-              </div>
-
-              <label id="hearing-loss-age-group" class="hearing-loss-input">
-                Years
-                <input id="hearing-loss-age" type="number" min="18" max="90" step="1" value="55" />
-                <span id="hearing-loss-age-meta" class="hearing-loss-input-meta"></span>
-              </label>
-
-              <label id="hearing-loss-cutoff-group" class="hearing-loss-input hidden">
-                Cutoff
-                <input id="hearing-loss-cutoff" type="number" min="1500" max="18000" step="100" value="8000" />
-                <span id="hearing-loss-cutoff-meta" class="hearing-loss-input-meta"></span>
-              </label>
-            </div>
-
-            <p id="hearing-loss-summary" class="hearing-loss-summary"></p>
+        <section id="hearing-loss-screen" class="panel hidden">
+          <div class="screen-head">
+            <h2>Hearing Loss Preview</h2>
+            <label class="select-label">
+              Track
+              <select id="track-select-hearing-loss"></select>
+            </label>
           </div>
 
+          <div class="hearing-loss-stage">
+            <div class="hearing-loss-hero">
+              <p class="hearing-loss-kicker">Selected EQ</p>
+              <p id="hearing-loss-preset-name" class="hearing-loss-preset-name"></p>
+              <p class="hearing-loss-copy">Listen with your chosen EQ, then layer age-related roll-off on top while the track keeps playing.</p>
+            </div>
+
+            <div class="ab-buttons two hearing-loss-compare">
+              <button id="hearing-loss-current" class="ab-switch">Current</button>
+              <button id="hearing-loss-simulated" class="ab-switch">Simulated</button>
+            </div>
+
+            <div class="hearing-loss-card">
+              <div class="hearing-loss-topline">
+                <div class="hearing-loss-mode" role="tablist" aria-label="Hearing loss input mode">
+                  <button id="hearing-loss-mode-age" class="hearing-loss-mode-btn is-selected" type="button" aria-pressed="true">Age</button>
+                  <button id="hearing-loss-mode-manual" class="hearing-loss-mode-btn" type="button" aria-pressed="false">Manual</button>
+                </div>
+
+                <label id="hearing-loss-age-group" class="hearing-loss-input">
+                  Years
+                  <input id="hearing-loss-age" type="number" min="18" max="90" step="1" value="55" />
+                  <span id="hearing-loss-age-meta" class="hearing-loss-input-meta"></span>
+                </label>
+
+                <label id="hearing-loss-cutoff-group" class="hearing-loss-input hidden">
+                  Cutoff
+                  <input id="hearing-loss-cutoff" type="number" min="1500" max="18000" step="100" value="8000" />
+                  <span id="hearing-loss-cutoff-meta" class="hearing-loss-input-meta"></span>
+                </label>
+              </div>
+
+              <p id="hearing-loss-summary" class="hearing-loss-summary"></p>
+            </div>
+          </div>
+
+          <div class="shortcuts-legend">
+            <span class="legend-label">Keyboard:</span>
+            <div class="key-pair"><kbd>1</kbd> Current</div>
+            <div class="key-pair"><kbd>2</kbd> Simulated</div>
+            <div class="key-pair"><kbd>Space</kbd> Play</div>
+            <div class="key-pair"><kbd>←/→</kbd> Seek</div>
+            <div class="key-pair"><kbd>L</kbd> Loop</div>
+            <div class="key-pair"><kbd>[</kbd> Loop start</div>
+            <div class="key-pair"><kbd>]</kbd> Loop end</div>
+          </div>
+        </section>
+
+        <section id="playback-controls" class="panel hidden">
+          <h2 class="visually-hidden">Playback</h2>
           <div id="loop-info-row" class="loop-info-row" aria-hidden="true" aria-live="polite">
             <span id="loop-times">Loop: 0:00 - 0:00</span>
           </div>
