@@ -48,17 +48,17 @@ const MATRIX_DANGER_RGB = [235, 111, 146];
 const MATRIX_TEXT_MAX_MIX = 0.82;
 const MATRIX_TEXT_MIN_CONFIDENCE_SCALE = 0.62;
 
-// Approximate literature-inspired roll-off points: loss starts in the top octave first,
-// then moves downward with age.
+// Simplified low-pass proxy for age-related hearing loss. Real presbycusis is a gradual
+// high-frequency roll-off rather than a true cutoff, so keep this curve conservative.
 const HEARING_LOSS_AGE_CURVE = Object.freeze([
-  [18, 18000],
+  [20, 17000],
   [30, 15000],
-  [40, 12000],
-  [50, 9500],
-  [60, 7500],
-  [70, 5500],
-  [80, 4000],
-  [90, 3000],
+  [40, 14000],
+  [50, 12000],
+  [60, 10000],
+  [70, 8000],
+  [80, 6500],
+  [90, 5000],
 ]);
 
 
