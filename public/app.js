@@ -26,6 +26,10 @@ const LOOP_MIN_SECONDS = 1;
 const PLAYBACK_HIDE_MS = 420;
 const SEEK_THUMB_SIZE_CSS_VAR = "--seek-thumb-size";
 const SEEK_THUMB_RADIUS_FALLBACK_PX = 6;
+const HEARING_LOSS_MIN_AGE = 18;
+const HEARING_LOSS_MAX_AGE = 90;
+const HEARING_LOSS_MIN_CUTOFF_HZ = 1500;
+const HEARING_LOSS_MAX_CUTOFF_HZ = 18000;
 const RESET_CONFIRM_MS = 3000;
 const RESET_DONE_MS = 1500;
 const RESET_SCORES_DEFAULT_TEXT = "Reset All Scores";
@@ -43,6 +47,19 @@ const MATRIX_SUCCESS_RGB = [156, 207, 216];
 const MATRIX_DANGER_RGB = [235, 111, 146];
 const MATRIX_TEXT_MAX_MIX = 0.82;
 const MATRIX_TEXT_MIN_CONFIDENCE_SCALE = 0.62;
+
+// Approximate literature-inspired roll-off points: loss starts in the top octave first,
+// then moves downward with age.
+const HEARING_LOSS_AGE_CURVE = Object.freeze([
+  [18, 18000],
+  [30, 15000],
+  [40, 12000],
+  [50, 9500],
+  [60, 7500],
+  [70, 5500],
+  [80, 4000],
+  [90, 3000],
+]);
 
 
 const PLAY_ICON_SVG = `
@@ -95,6 +112,12 @@ const state = {
   isLoopHandleDragging: false,
   loopDragHandle: null,
   loopDragPointerId: null,
+  hearingLoss: {
+    enabled: false,
+    mode: "age",
+    age: 55,
+    manualCutoffHz: 8000,
+  },
   prepareToken: 0,
   playbackHideTimer: null,
 };
@@ -187,6 +210,17 @@ const dom = {
   loopTimes: document.getElementById("loop-times"),
   loopToggleBtn: document.getElementById("loop-toggle"),
   volumeSlider: document.getElementById("volume"),
+  hearingLossToggle: document.getElementById("hearing-loss-toggle"),
+  hearingLossToggleState: document.getElementById("hearing-loss-toggle-state"),
+  hearingLossModeAge: document.getElementById("hearing-loss-mode-age"),
+  hearingLossModeManual: document.getElementById("hearing-loss-mode-manual"),
+  hearingLossAgeGroup: document.getElementById("hearing-loss-age-group"),
+  hearingLossCutoffGroup: document.getElementById("hearing-loss-cutoff-group"),
+  hearingLossAgeInput: document.getElementById("hearing-loss-age"),
+  hearingLossAgeMeta: document.getElementById("hearing-loss-age-meta"),
+  hearingLossCutoffInput: document.getElementById("hearing-loss-cutoff"),
+  hearingLossCutoffMeta: document.getElementById("hearing-loss-cutoff-meta"),
+  hearingLossSummary: document.getElementById("hearing-loss-summary"),
 
   resultsTitle: document.getElementById("results-title"),
   preferenceTableBody: document.getElementById("preference-table-body"),
@@ -704,6 +738,115 @@ function updateAbxUi() {
 
 function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function lerp(start, end, amount) {
+  return start + (end - start) * amount;
+}
+
+function clampHearingLossAge(age) {
+  return Math.round(clampNumber(age, HEARING_LOSS_MIN_AGE, HEARING_LOSS_MAX_AGE));
+}
+
+function clampHearingLossCutoffHz(cutoffHz) {
+  const safeCutoff = clampNumber(cutoffHz, HEARING_LOSS_MIN_CUTOFF_HZ, HEARING_LOSS_MAX_CUTOFF_HZ);
+  return Math.round(safeCutoff / 100) * 100;
+}
+
+function getHearingLossCutoffForAge(age) {
+  const safeAge = clampHearingLossAge(age);
+
+  for (let index = 0; index < HEARING_LOSS_AGE_CURVE.length - 1; index += 1) {
+    const [startAge, startCutoff] = HEARING_LOSS_AGE_CURVE[index];
+    const [endAge, endCutoff] = HEARING_LOSS_AGE_CURVE[index + 1];
+
+    if (safeAge <= startAge) {
+      return startCutoff;
+    }
+
+    if (safeAge <= endAge) {
+      const range = endAge - startAge;
+      const progress = range > 0 ? (safeAge - startAge) / range : 0;
+      return Math.round(lerp(startCutoff, endCutoff, progress));
+    }
+  }
+
+  return HEARING_LOSS_AGE_CURVE[HEARING_LOSS_AGE_CURVE.length - 1][1];
+}
+
+function getActiveHearingLossCutoffHz() {
+  return state.hearingLoss.mode === "manual"
+    ? state.hearingLoss.manualCutoffHz
+    : getHearingLossCutoffForAge(state.hearingLoss.age);
+}
+
+function getApproxAgeForCutoffHz(cutoffHz) {
+  const safeCutoffHz = clampHearingLossCutoffHz(cutoffHz);
+
+  for (let index = 0; index < HEARING_LOSS_AGE_CURVE.length - 1; index += 1) {
+    const [startAge, startCutoff] = HEARING_LOSS_AGE_CURVE[index];
+    const [endAge, endCutoff] = HEARING_LOSS_AGE_CURVE[index + 1];
+
+    if (safeCutoffHz >= startCutoff) {
+      return startAge;
+    }
+
+    if (safeCutoffHz >= endCutoff) {
+      const cutoffRange = startCutoff - endCutoff;
+      const progress = cutoffRange > 0 ? (startCutoff - safeCutoffHz) / cutoffRange : 0;
+      return Math.round(lerp(startAge, endAge, progress));
+    }
+  }
+
+  return HEARING_LOSS_AGE_CURVE[HEARING_LOSS_AGE_CURVE.length - 1][0];
+}
+
+function formatFrequencyLabel(frequencyHz) {
+  if (frequencyHz >= 10000) {
+    return `${Math.round(frequencyHz / 1000)} kHz`;
+  }
+
+  return `${(frequencyHz / 1000).toFixed(1)} kHz`;
+}
+
+function updateHearingLossUi() {
+  const activeMode = state.hearingLoss.mode;
+  const activeCutoffHz = getActiveHearingLossCutoffHz();
+  const approxManualAge = getApproxAgeForCutoffHz(state.hearingLoss.manualCutoffHz);
+  const isEnabled = state.hearingLoss.enabled;
+
+  dom.hearingLossToggle.classList.toggle("is-active", isEnabled);
+  dom.hearingLossToggle.setAttribute("aria-pressed", String(isEnabled));
+  dom.hearingLossToggleState.textContent = isEnabled ? "On" : "Off";
+
+  dom.hearingLossModeAge.classList.toggle("is-selected", activeMode === "age");
+  dom.hearingLossModeAge.setAttribute("aria-pressed", String(activeMode === "age"));
+  dom.hearingLossModeManual.classList.toggle("is-selected", activeMode === "manual");
+  dom.hearingLossModeManual.setAttribute("aria-pressed", String(activeMode === "manual"));
+
+  dom.hearingLossAgeGroup.classList.toggle("hidden", activeMode !== "age");
+  dom.hearingLossCutoffGroup.classList.toggle("hidden", activeMode !== "manual");
+
+  dom.hearingLossAgeInput.value = String(state.hearingLoss.age);
+  dom.hearingLossCutoffInput.value = String(state.hearingLoss.manualCutoffHz);
+  dom.hearingLossAgeMeta.textContent = `Approx cutoff ${formatFrequencyLabel(getHearingLossCutoffForAge(state.hearingLoss.age))}`;
+  dom.hearingLossCutoffMeta.textContent = `Approx age ${approxManualAge} years`;
+
+  const description = activeMode === "age"
+    ? `Age ${state.hearingLoss.age} approximates a roll-off above ${formatFrequencyLabel(activeCutoffHz)}.`
+    : `Manual mode rolls off the top end above ${formatFrequencyLabel(activeCutoffHz)}.`;
+
+  dom.hearingLossSummary.textContent = isEnabled
+    ? `${description} This is applied after the active EQ.`
+    : `Off. ${description}`;
+}
+
+function applyHearingLossState() {
+  audio.setHearingLoss({
+    enabled: state.hearingLoss.enabled,
+    cutoffHz: getActiveHearingLossCutoffHz(),
+  });
+  updateHearingLossUi();
 }
 
 function getMatrixSignedStrength(winRate) {
@@ -2009,6 +2152,56 @@ function handleSetupTrackSelectChange(event) {
   syncTrackSelects();
 }
 
+function handleHearingLossToggle() {
+  state.hearingLoss.enabled = !state.hearingLoss.enabled;
+  applyHearingLossState();
+}
+
+function setHearingLossMode(mode) {
+  if (mode !== "age" && mode !== "manual") {
+    return;
+  }
+
+  state.hearingLoss.mode = mode;
+  applyHearingLossState();
+}
+
+function handleHearingLossAgeInput(event) {
+  if (!(event.target instanceof HTMLInputElement)) {
+    return;
+  }
+
+  const parsedAge = Number.parseInt(event.target.value, 10);
+  if (!Number.isFinite(parsedAge)) {
+    return;
+  }
+
+  state.hearingLoss.age = clampHearingLossAge(parsedAge);
+  applyHearingLossState();
+}
+
+function commitHearingLossAgeInput() {
+  dom.hearingLossAgeInput.value = String(state.hearingLoss.age);
+}
+
+function handleHearingLossCutoffInput(event) {
+  if (!(event.target instanceof HTMLInputElement)) {
+    return;
+  }
+
+  const parsedCutoffHz = Number.parseInt(event.target.value, 10);
+  if (!Number.isFinite(parsedCutoffHz)) {
+    return;
+  }
+
+  state.hearingLoss.manualCutoffHz = clampHearingLossCutoffHz(parsedCutoffHz);
+  applyHearingLossState();
+}
+
+function commitHearingLossCutoffInput() {
+  dom.hearingLossCutoffInput.value = String(state.hearingLoss.manualCutoffHz);
+}
+
 function setDropZoneActive(active) {
   dom.dropZone.classList.toggle("is-dragover", active);
 }
@@ -2208,6 +2401,16 @@ function attachEvents() {
     audio.setVolume(Number(dom.volumeSlider.value));
   });
 
+  dom.hearingLossToggle.addEventListener("click", handleHearingLossToggle);
+  dom.hearingLossModeAge.addEventListener("click", () => setHearingLossMode("age"));
+  dom.hearingLossModeManual.addEventListener("click", () => setHearingLossMode("manual"));
+  dom.hearingLossAgeInput.addEventListener("input", handleHearingLossAgeInput);
+  dom.hearingLossAgeInput.addEventListener("change", commitHearingLossAgeInput);
+  dom.hearingLossAgeInput.addEventListener("blur", commitHearingLossAgeInput);
+  dom.hearingLossCutoffInput.addEventListener("input", handleHearingLossCutoffInput);
+  dom.hearingLossCutoffInput.addEventListener("change", commitHearingLossCutoffInput);
+  dom.hearingLossCutoffInput.addEventListener("blur", commitHearingLossCutoffInput);
+
   dom.anotherRoundBtn.addEventListener("click", () => {
     if (state.selectedPresetIds.length < 2) {
       showScreen("setup");
@@ -2230,6 +2433,7 @@ function attachEvents() {
 
   audio.addEventListener("state", () => {
     updatePlaybackUi();
+    updateHearingLossUi();
     if (audio.isPlaying && playbackRafId === null) {
       startRenderLoop();
     }
@@ -2266,6 +2470,7 @@ async function init() {
   restoreDirectoryPanelState();
   attachEvents();
   updatePlaybackUi();
+  applyHearingLossState();
   showScreen("setup");
 
   state.source = await detectSource();

@@ -4,6 +4,9 @@ function clamp(value, min, max) {
 
 const MIN_LOOP_SECONDS = 1;
 const LOOP_EPSILON = 1e-6;
+const HEARING_LOSS_MIN_CUTOFF_HZ = 1000;
+const HEARING_LOSS_DISABLED_CUTOFF_HZ = 20000;
+const HEARING_LOSS_RAMP_SECONDS = 0.08;
 
 function dbToLinear(db) {
   return 10 ** (db / 20);
@@ -501,8 +504,14 @@ export class AudioEngine extends EventTarget {
   constructor() {
     super();
     this.context = null;
+    this.playbackBus = null;
+    this.hearingLossFilters = [];
     this.masterGain = null;
     this.volume = 1;
+    this.hearingLoss = {
+      enabled: false,
+      cutoffHz: HEARING_LOSS_DISABLED_CUTOFF_HZ,
+    };
 
     this.variants = [];
     this.variantMap = new Map();
@@ -542,9 +551,25 @@ export class AudioEngine extends EventTarget {
     }
 
     this.context = new AudioContextCtor();
+    this.playbackBus = this.context.createGain();
+    this.hearingLossFilters = [
+      this.context.createBiquadFilter(),
+      this.context.createBiquadFilter(),
+    ];
     this.masterGain = this.context.createGain();
     this.masterGain.gain.value = this.volume;
+
+    let tailNode = this.playbackBus;
+    for (const filter of this.hearingLossFilters) {
+      filter.type = "lowpass";
+      filter.Q.value = 0.70710678;
+      tailNode.connect(filter);
+      tailNode = filter;
+    }
+
+    tailNode.connect(this.masterGain);
     this.masterGain.connect(this.context.destination);
+    this.applyHearingLossSettings();
 
     return this.context;
   }
@@ -556,6 +581,10 @@ export class AudioEngine extends EventTarget {
       duration: this.duration,
       activeVariantId: this.activeVariantId,
       volume: this.volume,
+      hearingLoss: {
+        enabled: this.hearingLoss.enabled,
+        cutoffHz: this.hearingLoss.cutoffHz,
+      },
       loop: this.getLoopState(),
     };
   }
@@ -912,6 +941,46 @@ export class AudioEngine extends EventTarget {
     this.emitState();
   }
 
+  setHearingLoss({ enabled = this.hearingLoss.enabled, cutoffHz = this.hearingLoss.cutoffHz } = {}) {
+    this.hearingLoss.enabled = Boolean(enabled);
+    this.hearingLoss.cutoffHz = clamp(
+      Number.isFinite(cutoffHz) ? cutoffHz : HEARING_LOSS_DISABLED_CUTOFF_HZ,
+      HEARING_LOSS_MIN_CUTOFF_HZ,
+      HEARING_LOSS_DISABLED_CUTOFF_HZ,
+    );
+    this.applyHearingLossSettings();
+    this.emitState();
+  }
+
+  applyHearingLossSettings() {
+    if (!this.context || this.hearingLossFilters.length === 0) {
+      return;
+    }
+
+    const now = this.context.currentTime;
+    const targetCutoff = this.hearingLoss.enabled
+      ? this.hearingLoss.cutoffHz
+      : HEARING_LOSS_DISABLED_CUTOFF_HZ;
+
+    for (const filter of this.hearingLossFilters) {
+      filter.type = "lowpass";
+      filter.Q.value = 0.70710678;
+
+      const currentValue = Number.isFinite(filter.frequency.value)
+        ? filter.frequency.value
+        : targetCutoff;
+
+      filter.frequency.cancelScheduledValues?.(now);
+      filter.frequency.setValueAtTime?.(currentValue, now);
+
+      if (typeof filter.frequency.linearRampToValueAtTime === "function") {
+        filter.frequency.linearRampToValueAtTime(targetCutoff, now + HEARING_LOSS_RAMP_SECONDS);
+      } else {
+        filter.frequency.value = targetCutoff;
+      }
+    }
+  }
+
   getCurrentTime() {
     if (!this.isPlaying || !this.context) {
       return clamp(this.playbackOffset, 0, this.duration || 0);
@@ -969,7 +1038,7 @@ export class AudioEngine extends EventTarget {
       gain.gain.setValueAtTime(isActive ? 1 : 0, when);
 
       source.connect(gain);
-      gain.connect(this.masterGain);
+      gain.connect(this.playbackBus ?? this.masterGain);
       source.start(when, safeOffset);
 
       this.currentNodes.push({

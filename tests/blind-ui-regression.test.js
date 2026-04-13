@@ -161,6 +161,27 @@ describe("blind UI regression checks", () => {
     expect(appSource).toContain("dom.playPauseBtn.innerHTML = playback.isPlaying ? PAUSE_ICON_SVG : PLAY_ICON_SVG;");
   });
 
+  test("playback controls include hearing loss simulation controls", () => {
+    expect(htmlSource).toContain('id="hearing-loss-toggle"');
+    expect(htmlSource).toContain('id="hearing-loss-mode-age"');
+    expect(htmlSource).toContain('id="hearing-loss-mode-manual"');
+    expect(htmlSource).toContain('id="hearing-loss-age"');
+    expect(htmlSource).toContain('id="hearing-loss-age-meta"');
+    expect(htmlSource).toContain('id="hearing-loss-cutoff"');
+    expect(htmlSource).toContain('id="hearing-loss-cutoff-meta"');
+    expect(htmlSource).toContain('id="hearing-loss-summary"');
+    expect(appSource).toContain('mode: "age",');
+    expect(appSource).toContain("function getHearingLossCutoffForAge(age) {");
+    expect(appSource).toContain("function getApproxAgeForCutoffHz(cutoffHz) {");
+    expect(appSource).toContain('dom.hearingLossAgeMeta.textContent = `Approx cutoff ${formatFrequencyLabel(getHearingLossCutoffForAge(state.hearingLoss.age))}`;');
+    expect(appSource).toContain('dom.hearingLossCutoffMeta.textContent = `Approx age ${approxManualAge} years`;');
+    expect(appSource).toContain("audio.setHearingLoss({");
+    expect(styleSource).toContain(".hearing-loss-row");
+    expect(styleSource).toContain(".hearing-loss-input-meta");
+    expect(styleSource).toContain(".hearing-loss-toggle.is-active");
+    expect(styleSource).toContain(".hearing-loss-mode-btn.is-selected");
+  });
+
   test("setup screen includes an inline reset scores action", () => {
     const setupActions = '<div class="actions stacked">';
     const resetButton = '<button id="reset-scores" class="reset-scores" type="button">Reset All Scores</button>';

@@ -221,6 +221,34 @@
 
         <section id="playback-controls" class="panel hidden">
           <h2 class="visually-hidden">Playback</h2>
+          <div class="hearing-loss-row">
+            <div class="hearing-loss-topline">
+              <button id="hearing-loss-toggle" class="secondary hearing-loss-toggle" type="button" aria-pressed="false">
+                Hearing Loss
+                <span id="hearing-loss-toggle-state" class="hearing-loss-toggle-state">Off</span>
+              </button>
+
+              <div class="hearing-loss-mode" role="tablist" aria-label="Hearing loss input mode">
+                <button id="hearing-loss-mode-age" class="hearing-loss-mode-btn is-selected" type="button" aria-pressed="true">Age</button>
+                <button id="hearing-loss-mode-manual" class="hearing-loss-mode-btn" type="button" aria-pressed="false">Manual</button>
+              </div>
+
+              <label id="hearing-loss-age-group" class="hearing-loss-input">
+                Years
+                <input id="hearing-loss-age" type="number" min="18" max="90" step="1" value="55" />
+                <span id="hearing-loss-age-meta" class="hearing-loss-input-meta"></span>
+              </label>
+
+              <label id="hearing-loss-cutoff-group" class="hearing-loss-input hidden">
+                Cutoff
+                <input id="hearing-loss-cutoff" type="number" min="1500" max="18000" step="100" value="8000" />
+                <span id="hearing-loss-cutoff-meta" class="hearing-loss-input-meta"></span>
+              </label>
+            </div>
+
+            <p id="hearing-loss-summary" class="hearing-loss-summary"></p>
+          </div>
+
           <div id="loop-info-row" class="loop-info-row" aria-hidden="true" aria-live="polite">
             <span id="loop-times">Loop: 0:00 - 0:00</span>
           </div>

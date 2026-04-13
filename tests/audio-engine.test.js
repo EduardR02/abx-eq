@@ -147,6 +147,24 @@ function createPrepareTrackContext(decodedBuffer = createSimpleAudioBuffer()) {
         disconnect() {},
       };
     },
+    createBiquadFilter() {
+      return {
+        type: null,
+        frequency: createFakeParam(20000),
+        Q: { value: 0 },
+        gain: { value: 0 },
+        connect() {},
+        disconnect() {},
+      };
+    },
+  };
+}
+
+function createFakeHearingLossFilter(initialFrequency = 20000) {
+  return {
+    type: null,
+    frequency: createFakeParam(initialFrequency),
+    Q: { value: 0 },
   };
 }
 
@@ -191,6 +209,56 @@ describe("AudioEngine.setActiveVariant", () => {
 
     expect(param.calls).toEqual([]);
     expect(engine.activeVariantId).toBe(null);
+  });
+});
+
+describe("AudioEngine hearing loss controls", () => {
+  test("stores hearing loss settings before the audio context exists", () => {
+    const engine = new AudioEngine();
+
+    engine.setHearingLoss({ enabled: true, cutoffHz: 8200 });
+
+    expect(engine.getState().hearingLoss).toEqual({
+      enabled: true,
+      cutoffHz: 8200,
+    });
+  });
+
+  test("updates all hearing loss filters with the active cutoff", () => {
+    const engine = new AudioEngine();
+    const firstFilter = createFakeHearingLossFilter();
+    const secondFilter = createFakeHearingLossFilter();
+    engine.context = { currentTime: 4 };
+    engine.hearingLossFilters = [firstFilter, secondFilter];
+
+    engine.setHearingLoss({ enabled: true, cutoffHz: 7600 });
+
+    for (const filter of [firstFilter, secondFilter]) {
+      expect(filter.type).toBe("lowpass");
+      expect(filter.Q.value).toBeCloseTo(0.70710678, 8);
+      expect(filter.frequency.calls).toEqual([
+        { method: "cancelScheduledValues", time: 4 },
+        { method: "setValueAtTime", value: 20000, time: 4 },
+        { method: "linearRampToValueAtTime", value: 7600, time: 4.08 },
+      ]);
+    }
+  });
+
+  test("bypasses hearing loss by restoring the max cutoff", () => {
+    const engine = new AudioEngine();
+    const filter = createFakeHearingLossFilter(7600);
+    engine.context = { currentTime: 7 };
+    engine.hearingLossFilters = [filter];
+    engine.hearingLoss = { enabled: true, cutoffHz: 7600 };
+
+    engine.setHearingLoss({ enabled: false, cutoffHz: 7600 });
+
+    expect(filter.frequency.calls).toEqual([
+      { method: "cancelScheduledValues", time: 7 },
+      { method: "setValueAtTime", value: 7600, time: 7 },
+      { method: "linearRampToValueAtTime", value: 20000, time: 7.08 },
+    ]);
+    expect(engine.getState().hearingLoss.enabled).toBe(false);
   });
 });
 
